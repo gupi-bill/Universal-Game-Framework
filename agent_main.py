@@ -335,7 +335,7 @@ def llm_decide(game_state: str, predictions: str, combat_eval: str,
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_content},
         ],
-        "max_tokens": 150,
+        "max_tokens": 800,   # reasoning 模型（如 agnes-2.5-flash）会先出思维链，留足空间
         "temperature": 0.3,
     }
     try:
