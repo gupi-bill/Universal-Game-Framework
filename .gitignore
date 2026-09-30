@@ -68,3 +68,13 @@ Thumbs.db
 
 # 文档审计本地备份（v1.1，不入库）
 FUTURE.md.orig-v1.0
+
+# ---- Android 交叉编译产物（buildozer 下载的第三方源码包，单个就 30MB）----
+# 2026-09-30：这些曾被提交进历史，导致仓库 130MB。
+# 已用 git-filter-repo 从全部提交中剥离，并在此显式忽略。
+packaging/androidapp/.buildozer/
+packaging/androidapp/bin/
+packaging/androidapp/.gradle/
+packaging/androidapp/build/
+packaging/androidapp/*.apk
+packaging/androidapp/*.aab
