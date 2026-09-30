@@ -270,7 +270,7 @@ python agent_cli.py -c mode     # 模式 / 感知后端 / LLM / VLM / 激活游�
 | 项 | 结论 | 复核命令 |
 |---|---|---|
 | Python 语法 | 全仓库 `compileall` 通过 | `bash scripts/check.sh --fast` |
-| 单元测试 | **987 用例全绿** | `python -m pytest tests/ -q` |
+| 单元测试 | **991 用例全绿** | `python -m pytest tests/ -q` |
 | 启动自检 | 本机 ERROR 0 / WARN 6，每条附「修复 + 降级」指引 | `python boot_check.py` |
 | 游戏档案 | florr / space_invaders 两份 `--strict` 全过 | `python game_profile_check.py --all --strict` |
 | MCP 工具 | 16 个工具可注册 / 可调用 / schema 正确 + 知识库往返保真 | `python tools/mcp_tools_check.py --strict` |
@@ -289,6 +289,12 @@ python agent_cli.py -c mode     # 模式 / 感知后端 / LLM / VLM / 激活游�
 | 联网教程检索 / Webhook 推送 | 无外部 MCP、无网络 | 注入假 `requests`、返回降级提示 |
 | 容器镜像构建 | 本机无 docker | 仅静态口径对齐 + headless 替换 |
 | GUI 真实渲染（Tk / PyQt / Streamlit） | 无 X server / 未安装 | 仅验证可用性与命令构造 |
+
+**在 headless 机器（服务器 / 容器 / CI）上跑门禁**：`boot_check` 现在会把
+「装了但导入失败」也算进可降级项（例如无头环境下 `import pyautogui` 抛
+`DisplayConnectionError`），报 WARN 而非 ERROR，退出码 0。
+早期版本只捕获 `ImportError`，异常会直接冒出去让自检崩掉，
+在任何无显示器的机器上门禁恒红。
 
 冲刺全记录见 [devplan/PROGRESS.md](devplan/PROGRESS.md)，阶段计划见 [devplan/PLAN.md](devplan/PLAN.md)，运维口径见 [devplan/OPS.md](devplan/OPS.md)。
 

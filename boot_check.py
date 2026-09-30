@@ -140,6 +140,10 @@ def _check() -> list:
             importlib.import_module(lib)
         except ImportError:
             issues.append(_issue("ERROR", f"缺少核心库 {lib}（{use}）", fix))
+        except Exception as e:
+            # 装了但导入失败：确实该阻断，但要说清原因而不是让异常冒出去
+            issues.append(_issue(
+                "ERROR", f"核心库 {lib} 装了但用不了：{type(e).__name__}: {e}", fix))
 
     # 3. 可选依赖（缺 = 降级，不阻断）
     for lib, (use, fix, degrade) in OPTIONAL_LIBS.items():
@@ -147,6 +151,16 @@ def _check() -> list:
             importlib.import_module(lib)
         except ImportError:
             issues.append(_issue("WARN", f"缺少可选库 {lib}（{use}）", fix, degrade))
+        except Exception as e:
+            # 装了但导入失败也算不可用，而且原因要说出来。
+            # 典型场景：无头机器上 import pyautogui 会抛
+            # KeyError: 'DISPLAY'（不是 ImportError），或者装了 GTK 运行时
+            # 却在无头环境炸 Xlib.DisplayConnectionError。
+            # 以前这里只 catch ImportError，异常直接冒出去，
+            # boot_check 自己崩掉、退出码 1，看起来像「启动自检失败」。
+            issues.append(_issue(
+                "WARN", f"可选库 {lib} 装了但用不了：{type(e).__name__}: {e}",
+                fix, degrade))
 
     # 4. 运行环境（GUI / X server / 模型权重）—— 只提示降级
     issues.extend(_headless_report())
