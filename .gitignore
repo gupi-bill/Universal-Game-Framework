@@ -78,3 +78,25 @@ packaging/androidapp/.gradle/
 packaging/androidapp/build/
 packaging/androidapp/*.apk
 packaging/androidapp/*.aab
+
+# ---- 测试与工具缓存 ----
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# ---- 自动化 / 编辑器 / 系统 ----
+.workbuddy/
+.trae/
+*.orig
+*.rej
+*.bak
+*~
+.DS_Store
+Thumbs.db
+desktop.ini

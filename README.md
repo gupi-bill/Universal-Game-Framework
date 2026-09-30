@@ -376,7 +376,20 @@ Universal-Game-Framework/
 
 > ⚠️ **口径说明**：v0.1~v1.9 的「已完成」指**功能代码已存在且通过离线单测/冒烟**，不代表在真实 Florr.io 对局中验收过 —— 真实 LLM 决策、截图感知、键鼠操作在本机均无条件实测。判定依据见上方 [验证状态](#-验证状态)。
 
-📚 完整开发计划见 [ROADMAP.md](ROADMAP.md) ｜ 原理与部署详解见 [PROJECT_SUMMARY.md](PROJECT_SUMMARY.md) ｜ 冲刺进度见 [devplan/PROGRESS.md](devplan/PROGRESS.md)
+### 文档地图
+
+| 文档 | 讲什么 |
+|------|--------|
+| [docs/MCP_INSTALL.md](docs/MCP_INSTALL.md) | 装进你的 Agent（三分钟） |
+| [docs/MCP_EXAMPLES.md](docs/MCP_EXAMPLES.md) | 装上之后怎么调 |
+| [docs/FAQ.md](docs/FAQ.md) | 常见问题 |
+| [docs/FUTURE.md](docs/FUTURE.md) | **未来全景蓝图** —— 三个核心命题、v2→v5 分阶段计划、25 个研究课题、风险清单、里程碑时间表、OKR。含「反向假设检验」：如果这些判断错了会怎样 |
+| [SECURITY.md](SECURITY.md) | 安全边界与合规红线 |
+| [ROADMAP.md](ROADMAP.md) | 已完成版本的详细记录 |
+| [PROJECT_SUMMARY.md](PROJECT_SUMMARY.md) | 原理与部署详解 |
+| [devplan/](devplan/) | **内部推进记录**（冲刺计划、审计、运维口径）—— 非对外承诺 |
+
+> ⚠️ **`devplan/` 是内部工单，不是产品文档。** 里面的阶段划分与日期只反映当时的推进计划，不代表已交付。看 [验证状态](#-验证状态) 那一节判断什么是真的。
 
 ---
 
