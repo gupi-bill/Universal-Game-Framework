@@ -270,7 +270,7 @@ python agent_cli.py -c mode     # 模式 / 感知后端 / LLM / VLM / 激活游�
 | 项 | 结论 | 复核命令 |
 |---|---|---|
 | Python 语法 | 全仓库 `compileall` 通过 | `bash scripts/check.sh --fast` |
-| 单元测试 | **1009 用例全绿** | `python -m pytest tests/ -q` |
+| 单元测试 | **1014 用例全绿** | `python -m pytest tests/ -q` |
 | 启动自检 | 本机 ERROR 0 / WARN 6，每条附「修复 + 降级」指引 | `python boot_check.py` |
 | 游戏档案 | florr / space_invaders 两份 `--strict` 全过 | `python game_profile_check.py --all --strict` |
 | MCP 工具 | 16 个工具可注册 / 可调用 / schema 正确 + 知识库往返保真 | `python tools/mcp_tools_check.py --strict` |
@@ -278,7 +278,7 @@ python agent_cli.py -c mode     # 模式 / 感知后端 / LLM / VLM / 激活游�
 | 主循环 | 离线 5 轮跑通：感知 → 预判 → 决策 → 动作 → 记忆 → 复盘 → 汇报 | `UGF_DRY_RUN=1 python agent_main.py --rounds 5` |
 | 统一启动器 | UI 探测 / 选择 / 离线开关透传全部可验 | `python launcher.py --ui auto --selftest` |
 | 运维脚本 | 启停 dry-run 零副作用；日志轮转与临时清理已沙箱实测 | `bash start_all.sh --dry-run` |
-| **P2 闭环 A/B** | **证伪 ❌** —— 知识组比无知识组**少活 5 回合**；决策层本身 +16 回合 ✅ | `python ab_experiment.py --n 20` |
+| **P2 闭环 A/B** | **成立 ✅** —— 知识组存活率高 **10~20 个百分点**，HP 中位高 32~40，被击中少 4~5 次（三批 seed 复现，离线 arena） | `python ab_experiment.py --n 20` |
 
 ### 未验证（受本机环境限制，非代码缺陷）
 
@@ -298,21 +298,32 @@ python agent_cli.py -c mode     # 模式 / 感知后端 / LLM / VLM / 激活游�
 早期版本只捕获 `ImportError`，异常会直接冒出去让自检崩掉，
 在任何无显示器的机器上门禁恒红。
 
-### ⚠️ 已知问题：知识闭环当前**没有**产生增益
+### ✅ P2 实证：知识闭环确实产生增益（限定离线环境）
 
-A/B 实验（20 组 × 200 回合，离线 arena）给出的是**否定结论**：
+A/B 实验（`arena.py` 可复现模拟，三批 seed 各 20~25 组 × 200 回合）：
 
-| 对照 | 回合中位数 |
-|------|----------|
-| baseline（无决策层） | 59.0 |
-| no_kb（有决策层，无知识） | **75.0** ✅ 决策层 +16 回合 |
-| kb（有决策层 + 知识） | 70.0 ❌ 知识 **−5** 回合 |
+| 组 | 存活率 | HP 中位 | 被击中 | 撤离率 |
+|----|--------|---------|--------|--------|
+| baseline（无决策层） | 0% | 0.0 | 13 | 0% |
+| no_kb（有决策层，无知识） | 80~90% | 4.0 | 12 | 80~90% |
+| **kb（有决策层 + 知识）** | **100%** | **36~44** | **7~8** | **100%** |
 
-逐条探针定位到元凶是知识库里的 `retreat` / `keep_distance` 标签 ——
-它们在这个场景**无适用面**。结论：**闭环是通的，但库存的是战术名词，
-不是「对这一局面真的有用」的经验。**
+**知识的额外增益：存活率 +10~20 个百分点，HP 中位 +32~40，被击中少 4~5 次。**
 
-下一步该怎么修见 [devplan/P2_AB_EXPERIMENT.md](devplan/P2_AB_EXPERIMENT.md) §7。
+这个结论是被**三轮实验反复打脸才拿到的**：
+
+1. 第一轮：知识组**少活 5 回合**（证伪）
+2. 定位到根因在入库侧 —— 条目没有适用条件，`extract_tactics`
+   只能靠关键词猜，于是「撤退」二字出现在哪就抽 `retreat` 标签
+3. 修完条件门控仍不生效，又查出 `except TypeError` 吞掉了谓词签名错误，
+   导致「低血量」条件**永不匹配**
+4. 同时发现 arena 里 player 不能输出也不能撤离，
+   「集火」「撤退」两类知识在结构上就没有可用空间 —— 补上后才测得出
+
+完整过程见 [devplan/P2_AB_EXPERIMENT.md](devplan/P2_AB_EXPERIMENT.md)。
+
+⚠️ **限定条件**：结论来自离线模拟，**不能外推到实机**。
+arena 不是真实游戏，也没有真实游戏的操作延迟与视听反馈。
 
 复现：`python arena.py --self-test && python ab_experiment.py --n 20`
 
