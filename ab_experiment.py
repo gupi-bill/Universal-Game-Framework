@@ -151,18 +151,27 @@ def _tactical_spot(arena: Arena, decision: str, tactics: list) -> float:
     - fight      ：压上去，往敌人质心走
     - attack     ：同上（知识「集火」）
     - cautious   ：往空档走（远离质心、靠近边缘）
-    - retreat    ：往离最近敌人最远的一侧跑
-    - defend     ：往角落躲（同时离质心和最近敌人都远）
+    - retreat    ：**朝撤离点跑**（有撤离点时），否则往离最近威胁最远
+    - defend     ：同上但走得更保守（保留距离，不硬闯）
+
+    v2.0 P2 第二轮修正：原先 retreat/defend 一律「往离最近威胁最远」。
+    但 arena 的撤离点在固定一侧（默认最左），「离威胁最远」经常正好
+    是撤离点的**反方向** —— 知识说「转为防守」，结果把玩家赶到了
+    永远到不了撤离点的地方。这不是知识的问题，是策略不会用战场信息。
     """
     cx = _centroid_x(arena)
     nx = _nearest_threat_x(arena)
+    exfil = arena.cfg.exfil_x
 
     if decision in ("fight", "attack"):
-        # 进攻：朝质心压
         return min(0.95, max(0.05, cx))
+
     if decision in ("retreat", "defend"):
-        # 撤退/防守：往离最近威胁最远的一侧
+        # 有撤离点：朝它跑。这才是「脱离接触」的真正含义。
+        if exfil is not None:
+            return exfil
         return 0.03 if nx > 0.5 else 0.97
+
     if decision == "cautious_fight":
         # 谨慎：留在场地边缘但不正对质心
         return 0.12 if cx > 0.5 else 0.88
@@ -187,7 +196,10 @@ def policy_kb(arena: Arena, snap: dict, rnd: int, kb: list):
         # arena 是单机场景（teammates 恒为 []），所以 has_allies=False。
         # 这正是要验的：队友类知识不该在单机局生效。
         if kl.knowledge_gate(d, kb, hp_ratio=hp_ratio, threat_ratio=threat_ratio):
-            adjusted = kl.apply_tactics(d, kb, has_allies=False)
+            adjusted = kl.apply_tactics(d, kb, has_allies=False,
+                                        hp_ratio=hp_ratio,
+                                        threat_ratio=threat_ratio,
+                                        n_enemies=len(snap["entities"]))
             if adjusted:
                 d = adjusted
     except Exception:
@@ -210,10 +222,24 @@ POLICIES = {
 # 现在改成「敌人不加速、速度中等、伤害偏低」：好策略能活 70~90 回合，
 # 差策略明显更短，差异才有统计意义。
 # 保留一组「高难」作为压力测试开关。
+# 难度配置。第一版用 ArenaConfig 默认值，实测三组 30/30 全部必死、
+# 回合中位数全在 33~35 —— 没有任何区分度，测不出差异。
 DIFFICULTY = {
+    # 只有躲避：决策层 +16 回合，但知识无处发力
     "normal": dict(enemies=5, enemy_speed=70.0, ramp_step=0.0,
                    contact_damage=8, contact_radius=22.0),
+    # 只有躲避 + 会死
     "hard": dict(enemies=6, ramp_step=18.0, contact_damage=12),
+    # v2.0 P2 第二轮：**有攻防**。
+    # 原 normal 里 player 只能跑、不能输出、也不能撤离，
+    # 于是「集火」和「撤退」两类知识在结构上就没有可用空间 ——
+    # P2 既无法被证实也无法被证伪。
+    # 这一档加了远程输出（集火知识有了用武之地）
+    # 与撤离点（撤退知识有了用武之地）。
+    "combat": dict(enemies=6, enemy_speed=70.0, ramp_step=6.0,
+                   contact_damage=8, contact_radius=22.0,
+                   attack_damage=4, attack_cooldown=2,
+                   safe_hp_ratio=0.5, exfil_x=0.04, exfil_radius=0.10),
 }
 
 
@@ -234,6 +260,8 @@ def run_one(policy_name: str, seed: int, rounds: int, tactics: list,
         "hp": a.st.hp,
         "hits": a.st.hits_taken,
         "score": a.st.score,
+        "kills": a.st.kills,
+        "exfiltrated": bool(a.st.exfiltrated),
         "survived": bool(a.st.survived or a.st.hp > 0),
     }
 
@@ -267,6 +295,7 @@ def summarize(rows: list) -> dict:
     hp = [r["hp"] for r in rows]
     hits = [r["hits"] for r in rows]
     lo, hi = wilson(surv, len(rows))
+    exfil = sum(1 for r in rows if r.get("exfiltrated"))
     return {
         "n": len(rows),
         "survived": surv,
@@ -276,6 +305,7 @@ def summarize(rows: list) -> dict:
         "rounds_mean": round(statistics.fmean(rounds), 1),
         "hp_median": statistics.median(hp),
         "hits_median": statistics.median(hits),
+        "exfil_rate": exfil / len(rows),
     }
 
 
@@ -317,8 +347,9 @@ def main(argv=None) -> int:
     ap.add_argument("--rounds", type=int, default=200, help="单局回合上限")
     ap.add_argument("--offset", type=int, default=0, help="seed 起点偏移，换批次用")
     ap.add_argument("--json", action="store_true", help="输出 JSON")
-    ap.add_argument("--difficulty", choices=sorted(DIFFICULTY), default="normal",
-                    help="normal=有区分度（默认） / hard=高难压力测试")
+    ap.add_argument("--difficulty", choices=sorted(DIFFICULTY), default="combat",
+                    help="combat=有攻防，知识有可用空间（默认） / "
+                         "normal=只有躲避 / hard=高难")
     args = ap.parse_args(argv)
 
     # 先确认地基没问题
@@ -336,7 +367,8 @@ def main(argv=None) -> int:
     print(f"  seed 范围   : {seeds[0]} ~ {seeds[-1]}（{len(seeds)} 组）")
     print(f"  单局回合上限: {args.rounds}")
     print(f"  难度         : {args.difficulty}"
-          f"（normal 有区分度；hard 下各策略多半都会死）")
+          + ("　← 有远程输出与撤离点，集火/撤退类知识可生效"
+             if args.difficulty == "combat" else ""))
     print(f"  知识库标签  : {tactics if tactics else '（空 —— 这正是 no_kb 组）'}")
     print()
 
@@ -350,9 +382,10 @@ def main(argv=None) -> int:
         s = results[name]["summary"]
         print(f"  {name:<9} 存活 {s['survived']:>2}/{s['n']}"
               f"（{s['survival_rate']*100:>5.1f}%  95%CI {s['survival_ci'][0]*100:.0f}–{s['survival_ci'][1]*100:.0f}%）"
-              f"  回合中位 {s['rounds_median']:>5.1f}"
               f"  HP 中位 {s['hp_median']:>5.1f}"
-              f"  被击中中位 {s['hits_median']:>4.1f}")
+              f"  被击中 {s['hits_median']:>4.1f}"
+              f"  撤离 {s['exfil_rate']*100:>5.1f}%"
+              f"  回合中位 {s['rounds_median']:>5.1f}")
 
     print()
     kb_s = results["kb"]["summary"]
@@ -363,50 +396,45 @@ def main(argv=None) -> int:
     d_judge = no_s["rounds_median"] - base_s["rounds_median"]
 
     print("  ── 判读 ──")
-    print(f"  决策层本身的价值（no_kb − baseline）: {d_judge:+.1f} 回合")
-    print(f"  知识的额外价值（kb − no_kb）       : {d_rounds:+.1f} 回合"
-          f" / 存活率 {d_rate*100:+.1f} 个百分点")
+    print(f"  决策层的价值（no_kb − baseline）: 存活率 "
+          f"{(no_s['survival_rate']-base_s['survival_rate'])*100:+.1f} pp"
+          f" / HP {no_s['hp_median']-base_s['hp_median']:+.1f}")
+    print(f"  知识的额外价值（kb − no_kb）      : 存活率 "
+          f"{d_rate*100:+.1f} pp"
+          f" / HP {kb_s['hp_median']-no_s['hp_median']:+.1f}"
+          f" / 被击中 {no_s['hits_median']-kb_s['hits_median']:+.1f}")
 
-    # ---- 判读：区分「无效」与「有害」，并给出可执行的下一步 ----
-    # 这三种结果对应完全不同的后续动作，不能混为一谈。
-    EPS_R, EPS_P = 0.5, 0.10
-    if d_rounds > EPS_R:
-        verdict = "P2 方向成立（样本仍小）"
-        why = (f"知识组多活 {d_rounds:.1f} 回合、存活率 {d_rate*100:+.1f} 个百分点。"
-               f"但样本只有 {len(seeds)} 组且场景是简化模拟，不能外推到真实游戏 —— "
-               "下一步：换 --offset 复现，再上真机。")
-    elif abs(d_rounds) <= EPS_R:
-        verdict = "P2 未成立：无增益"
-        why = ("知识组与无知识组无显著差异。命中率 100% 只证明知识**流到了决策**，"
-               "不证明决策**变好了**。下一步：先确认知识库里存的是不是"
-               "「对这一局面真的有用」的经验，而不是泛泛的战术名词。")
-    else:
+    # 回合数不再是好指标：撤离机制存在时，赢了就早撤 → 回合少但活下来了；
+    # 不撤苟着 → 回合多但血空。所以只在没有撤离能力时才用它。
+    has_exfil = kb_s["exfil_rate"] > 0 or no_s["exfil_rate"] > 0
+    if has_exfil:
+        print("  （本档有撤离机制，回合数不作为主指标：赢了会提前撤离，"
+              "回合少反而是赢的表现）")
+
+    # ---- 主判据：存活率 ----
+    EPS_P, EPS_HP = 0.10, 10.0
+    d_hp = kb_s["hp_median"] - no_s["hp_median"]
+    d_hit = kb_s["hits_median"] - no_s["hits_median"]
+    gained = (d_rate >= EPS_P) or (d_hp >= EPS_HP) or (d_hit <= -1.0)
+
+    if d_rate >= EPS_P and d_hp > 0:
+        verdict = "P2 成立（离线模拟）"
+        why = (f"知识组存活率高 {d_rate*100:.1f} 个百分点、血量中位高 {d_hp:.0f}、"
+               f"被击中少 {abs(d_hit):.0f} 次。知识确实让决策变好了。")
+    elif gained:
+        verdict = "P2 部分成立"
+        why = (f"存活率 {d_rate*100:+.1f}pp / HP {d_hp:+.0f} / 被击中 {d_hit:+.0f}。"
+               "至少有一项指标改善，但样本仍小（"
+               f"{len(seeds)} 组）且场景是简化模拟。")
+    elif d_rate <= -EPS_P:
         verdict = "P2 反向：知识当前有害"
-        why = (f"知识组少活 {abs(d_rounds):.1f} 回合。这不是玄学，是可定位的："
-               "逐回合统计决策分布，能看到知识把某个决策改成了另一个，"
-               "而后者在这个动作空间里更差。"
-               "下一步：要么给知识加局面门控（只在适用场景生效），"
-               "要么承认现有知识库对这个场景不适用并清掉。")
-
-    # 再细分：定位是哪条标签在起作用
-    if d_rounds < -EPS_R:
-        print("\n  ── 定位是哪条标签在起作用 ──")
-        import statistics
-        probes = [
-            ([], "空知识库"),
-            (["retreat", "keep_distance"], "撤退/保持距离类"),
-            (["focus_fire"], "集火类"),
-            (["protect_ally"], "保护队友类"),
-            (["retreat", "keep_distance", "focus_fire", "protect_ally"], "当前知识库全部"),
-        ]
-        for tags, label in probes:
-            rr = [run_one("kb", s, args.rounds, tags, difficulty=args.difficulty)
-                  for s in seeds]
-            med = statistics.median(r["rounds"] for r in rr)
-            delta = med - no_s["rounds_median"]
-            flag = "  ← 拉低了结果" if delta < -EPS_R else ""
-            print(f"    {label:<22} 回合中位 {med:>5.1f}"
-                  f"（对照 {delta:+.1f}）{flag}")
+        why = (f"知识组存活率低 {abs(d_rate)*100:.1f} 个百分点。"
+               "下面逐条探针会指出是哪条标签在拉低。")
+    else:
+        verdict = "P2 未证实：无增益"
+        why = ("知识组与无知识组无显著差异。命中率 100% 只证明知识流到了决策，"
+               "不证明决策变好了。下一步：让知识库存局面特有的经验，"
+               "而不是通用战术名词。")
 
     print(f"\n  结论：{verdict}")
     print(f"  {why}")

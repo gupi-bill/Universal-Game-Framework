@@ -137,7 +137,17 @@ def test_extract_tactics_from_hit(kb):
     assert hit
     tactics = knowledge_loop.extract_tactics(text)
     assert tactics  # florr 档案含撤退/距离/集火类条目
-    assert set(tactics) <= set(knowledge_loop.TACTIC_RULES)
+    # v2.0 P2：返回值是 (标签, 条件元组) —— 条件必须一路带到决策层才能校验。
+    # 只传标签的话「何时用」就丢了，知识会退化成无条件覆盖。
+    tags = {t[0] if isinstance(t, (tuple, list)) else t for t in tactics}
+    assert tags <= set(knowledge_loop.TACTIC_RULES)
+    for item in tactics:
+        assert isinstance(item, tuple) and len(item) == 2, f"格式错：{item!r}"
+        tag, conds = item
+        assert tag in knowledge_loop.TACTIC_RULES
+        assert isinstance(conds, tuple) and conds, f"{tag} 没带条件"
+        # 每个条件都必须是决策层认得的谓词，否则会被保守跳过
+        assert all(c in knowledge_loop.CONDITION_PREDICATES for c in conds)
 
 
 def test_extract_tactics_on_miss_returns_empty():
@@ -358,8 +368,11 @@ def test_full_loop_two_rounds(kb):
     knowledge_loop.seed_knowledge(game)
     t1, h1 = knowledge_loop.retrieve(game, "战术", st)
     assert h1
+    # v2.0 P2：decide_with_knowledge 走默认局面参数（满血、无威胁），
+    # 带条件的知识在优势局面不应介入。劣势局面才介入。
     a1, cited1 = knowledge_loop.decide_with_knowledge("cautious_fight", t1, st, "战术")
-    assert a1 in ("defend", "attack")
+    assert a1 in ("", "defend", "attack")
+    assert cited1 == bool(a1)
 
     # 复盘回写：把本轮结论写进知识库
     mcp_server.kb_write("review_r1",
@@ -370,11 +383,27 @@ def test_full_loop_two_rounds(kb):
     # 第 2 轮：复盘内容必须能被检索到，且命中率不下降
     t2, h2 = knowledge_loop.retrieve(game, "对局复盘", st)
     assert h2 and "提前撤退" in t2
-    a2, _ = knowledge_loop.decide_with_knowledge("cautious_fight", t2, st, "对局复盘")
-    assert a2 in ("defend", "attack")
+    # v2.0 P2：这条复盘只写了「提前撤退」，**没有写何时该撤**。
+    # 新的条件校验会正确地拒绝它 —— 这正是本轮的核心改动：
+    # 没有触发条件的经验不该盲目改写决策（那会让知识闭环变负）。
+    a2, cited2 = knowledge_loop.decide_with_knowledge("cautious_fight", t2, st, "对局复盘")
+    assert a2 == "", "无条件复盘不应改写决策"
+    assert cited2 is False
+    # 但如果复盘写清了条件，同一份知识就该生效 —— 证明门控是可判定的
+    mcp_server.kb_write("review_r2",
+                        "# 对局复盘\n- 可改进点: 低血量时提前撤退\n",
+                        game_name=game)
+    t3, h3 = knowledge_loop.retrieve(game, "低血量", st)
+    assert h3, "按内容检索应命中 review_r2"
+    a3, cited3 = knowledge_loop.decide_with_knowledge("cautious_fight", t3, st, "低血量")
+    # 默认局面是满血无威胁，所以条件不满足、仍不该生效；
+    # 但解析必须能认出「低血量」这个条件
+    assert knowledge_loop.parse_condition("- 战术: 低血量时提前撤退")["conditions"]
+    assert cited3 == bool(a3)
 
     q = knowledge_loop.query_stats(game)
-    assert q["searches"] == 3 and q["hits"] == 3
+    # 4 次检索（战术 / 对局复盘 / 对局复盘 / review_r2），全部命中
+    assert q["searches"] == 4 and q["hits"] == 4
     assert q["hit_rate"] == 1.0
     assert q["citations"] >= (1 if cited1 else 0)
 

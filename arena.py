@@ -87,6 +87,24 @@ class ArenaConfig:
     width: float = DEFAULT_W
     height: float = DEFAULT_H
 
+    # --- v2.0 P2 第二轮新增 ---
+    # 原 arena 里 player 只能跑，不能输出、也不能撤离。
+    # 这导致「集火」和「撤退」两类知识**在结构上就没有可用空间** ——
+    # 防守就是站着挨打，撤退也跑不掉。于是 P2 无法被证实也无法被证伪。
+    # 加下面两项，给知识留出可以生效的场景。
+
+    #: 每次 attack 造成多少伤害（0 = 无输出手段）
+    attack_damage: int = 0
+    #: 射速：每多少回合可攻击一次
+    attack_cooldown: int = 1
+    #: 玩家血量低于此比例后进入「撤退窗口」，敌人不再追击
+    #: （模拟「脱离接触」）。设 0 表示永远无法脱离。
+    safe_hp_ratio: float = 0.0
+    #: 撤离目标点（归一化）。玩家到达即脱离战斗并结算存活。
+    exfil_x: float | None = None
+    #: 撤离点半径（归一化，横向）
+    exfil_radius: float = 0.06
+
 
 @dataclass
 class ArenaState:
@@ -103,6 +121,10 @@ class ArenaState:
     player_y: float = 0.0
     enemies: list = field(default_factory=list)
     score: int = 0
+    kills: int = 0
+    attacks: int = 0
+    exfiltrated: bool = False
+    _cd: int = 0
 
 
 class Arena:
@@ -136,7 +158,20 @@ class Arena:
                 "y": self.rnd.uniform(self.cfg.height * 0.10, self.cfg.height * 0.45),
                 "vx": self.rnd.choice((-1, 1)) * self.cfg.enemy_speed * self.rnd.uniform(0.7, 1.3),
                 "vy": 0.0,
+                "hp": 10,
             })
+
+    def _nearest_enemy(self):
+        """射程内最近的敌人。射程 = 半个屏宽（px）。"""
+        if not self.st.enemies:
+            return None
+        reach = self.cfg.width * 0.5
+        best, best_d = None, float("inf")
+        for e in self.st.enemies:
+            d = math.hypot(e["x"] - self.st.player_x, e["y"] - self.st.player_y)
+            if d <= reach and d < best_d:
+                best_d, best = d, e
+        return best
 
     def _speed_now(self) -> float:
         """当前回合的敌人速度（含难度爬升）。"""
@@ -183,6 +218,18 @@ class Arena:
         self.st.player_x = self._clamp(self.st.player_x, 0.0, c.width)
         self.st.player_y = self._clamp(self.st.player_y, 0.0, c.height)
 
+        # --- 撤离判定（P2 第二轮）：先于敌人推进 -------------------------
+        # 「脱离接触」是撤退类知识唯一可能有用的地方。
+        # 判据：血量低于 safe_hp_ratio 且已到撤离点附近 → 本局以存活结算。
+        if (c.exfil_x is not None and c.safe_hp_ratio > 0
+                and (self.st.hp / max(1, self.st.max_hp)) <= c.safe_hp_ratio):
+            if abs(self.st.player_x - c.exfil_x * c.width) <= c.exfil_radius * c.width:
+                self.st.exfiltrated = True
+                self.st.over = True
+                self.st.survived = True
+                self.st.score += 100
+                return self.snapshot()
+
         # --- 难度爬升 -----------------------------------------------------
         if c.spawn_every and self.st.round_no % max(1, c.spawn_every) == 0:
             self._spawn(1)
@@ -212,9 +259,23 @@ class Arena:
         else:
             self.st.dodges += 1
 
-        # 输出动作有微弱收益（让它不只是「永远跑」
-        if action == "attack":
+        # --- 远程输出（P2 第二轮）-----------------------------------------
+        # 原 arena 里 attack 只有 +3 分的装饰性收益，导致「集火」类知识
+        # 无论生效与否都不改变结果 —— 知识有没有用都测不出来。
+        # 现在 attack 有真实杀伤力：打到射程内最近的敌人。
+        if self.st._cd > 0:
+            self.st._cd -= 1
+        if action == "attack" and c.attack_damage > 0 and self.st._cd <= 0:
+            self.st._cd = max(0, c.attack_cooldown - 1)
+            self.st.attacks += 1
             self.st.score += 3
+            target = self._nearest_enemy()
+            if target is not None:
+                target["hp"] = target.get("hp", 10) - c.attack_damage
+                if target["hp"] <= 0:
+                    self.st.enemies.remove(target)
+                    self.st.kills += 1
+                    self.st.score += 20
 
         # --- 结算 ---------------------------------------------------------
         if self.st.hp <= 0:
@@ -262,6 +323,8 @@ class Arena:
                 "hp_ratio": round(hp_ratio, 3),
                 "hits": self.st.hits_taken,
                 "score": self.st.score,
+                "kills": self.st.kills,
+                "exfiltrated": self.st.exfiltrated,
             },
         }
 
@@ -284,12 +347,18 @@ def _self_test() -> int:
     print(f"  {'✓' if same else '✗'} 确定性：同 seed 同动作 → 同结果")
     ok &= same
 
-    # 2. 不同 seed → 不同结果
+    # 2. 不同 seed → 不同局面
+    # 比敌人生成位置，而不是存活统计：两个 seed 下玩家都可能恰好死在
+    # 同一回合、拿到同样的分数，但敌人初始位置一定不同。
     c = Arena(seed=8)
+    gen_diff = [e["x"] for e in c.st.enemies] != [e["x"] for e in a.st.enemies]
     for act, x in acts:
         c.step(act, x)
-    diff = (c.st.hits_taken != a.st.hits_taken) or (c.st.score != a.st.score)
-    print(f"  {'✓' if diff else '✗'} 差异性：不同 seed → 不同轨迹")
+    trail_diff = ([e["x"] for e in c.st.enemies] != [e["x"] for e in a.st.enemies]
+                  or c.st.hits_taken != a.st.hits_taken
+                  or c.st.score != a.st.score)
+    diff = gen_diff and trail_diff
+    print(f"  {'✓' if diff else '✗'} 差异性：不同 seed → 不同生成与轨迹")
     ok &= diff
 
     # 3. 因果链：站着不动会被打（hp 掉），一直跑能活（hp 掉得少）
@@ -314,6 +383,43 @@ def _self_test() -> int:
     print(f"  {'✓' if dead.st.over else '✗'} 死亡判定：血空即结束"
           f"（hp={dead.st.hp} over={dead.st.over}）")
     ok &= dead.st.over
+
+    # 5. 攻击手段真的有杀伤力（P2 第二轮）
+    shooter = Arena(ArenaConfig(seed=3, enemies=4, attack_damage=4,
+                                 attack_cooldown=1, ramp_step=0))
+    for _ in range(40):
+        if shooter.st.over or shooter.st.kills > 0:
+            break
+        shooter.step("attack")
+    killed = shooter.st.kills > 0
+    print(f"  {'✓' if killed else '✗'} 攻击有效：attack 能击杀敌人"
+          f"（击杀 {shooter.st.kills}）")
+    ok &= killed
+
+    # 6. 撤离点有效：低血时到达撤离点即以存活结算
+    evader = Arena(ArenaConfig(seed=3, enemies=3, attack_damage=0,
+                               safe_hp_ratio=0.9, exfil_x=0.03,
+                               exfil_radius=0.2, ramp_step=0,
+                               contact_damage=5))
+    for _ in range(120):
+        if evader.st.over:
+            break
+        evader.step("move", 0.02)      # 一直往撤离点跑
+    escaped = evader.st.exfiltrated and evader.st.survived
+    print(f"  {'✓' if escaped else '✗'} 撤离有效：低血时到达撤离点即存活结算"
+          f"（hp={evader.st.hp} exfil={evader.st.exfiltrated}）")
+    ok &= escaped
+
+    # 7. 攻击与撤离不该破坏确定性
+    a2, b2 = Arena(ArenaConfig(seed=5, attack_damage=4)), Arena(ArenaConfig(seed=5, attack_damage=4))
+    for i in range(50):
+        act = ["move", "attack", "defend"][i % 3]
+        x = [0.2, None, 0.9][i % 3]
+        a2.step(act, x)
+        b2.step(act, x)
+    same2 = (a2.st.hp, a2.st.kills, a2.st.score) == (b2.st.hp, b2.st.kills, b2.st.score)
+    print(f"  {'✓' if same2 else '✗'} 确定性（含攻击/撤离）：同 seed 同动作 → 同结果")
+    ok &= same2
 
     print("\n" + ("arena 自检通过" if ok else "arena 自检失败"))
     return 0 if ok else 1

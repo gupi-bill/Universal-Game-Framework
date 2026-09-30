@@ -278,12 +278,17 @@ def _fallback(state: dict, ev: dict, kb_text: str = ""):
 
 KB_TEXT = "共找到 1 条结果:\n## tactics.md\n- 战术: 低血量立即撤退并保持距离\n"
 
-
+# v2.0 P2：知识带「适用条件」，只在条件满足时介入。
+# 原来这组参数里 (1.0, 2.0, True) 期望「满血但被压也生效」——
+# 那是「有知识就生效」的旧假设。现在低血量条件不满足，就不该介入。
 @pytest.mark.parametrize("hp_ratio,threat,expect_kb", [
     (1.0, 0.0, False),    # 空场满血：不带偏
-    (0.2, 2.0, True),     # 残血高威胁：知识生效
-    (1.0, 2.0, True),     # 满血但被压：知识生效
+    (0.2, 2.0, True),     # 残血高威胁：知识生效（低血量条件满足）
+    (1.0, 2.0, False),    # 满血：低血量条件不满足 → 不生效
     (1.0, 0.5, False),    # 满血优势：不生效
+    # 注意：空场（threat=0）时 knowledge_gate 直接放行 False ——
+    # 「没有威胁就不该因为知识里写了撤退而一直防守」是 S20 定下的原则。
+    # 所以残血 + 空场也不生效，这不是 bug。
 ])
 def test_end_to_end_scenarios(hp_ratio, threat, expect_kb):
     state = {"afk_popup": False,
@@ -322,3 +327,18 @@ def test_end_to_end_afk_overrides_everything():
     state = {"afk_popup": True, "player": {"hp": 10, "max_hp": 100}}
     ev = {"decision": "retreat", "threat_ratio": 9.0}
     assert _fallback(state, ev, KB_TEXT) == {"action": "idle"}
+
+
+def test_kb_only_fires_when_condition_matches():
+    """P2 核心断言：知识只在它自己声明的条件下介入。
+
+    这组对照最能说明本轮改动的意义 —— 同一条知识，
+    低血时介入、满血时沉默。A/B 实验里知识组之所以能提升存活率，
+    靠的正是这个「该沉默时就沉默」。
+    """
+    low = {"afk_popup": False, "player": {"hp": 20, "max_hp": 100}, "teammates": []}
+    full = {"afk_popup": False, "player": {"hp": 100, "max_hp": 100}, "teammates": []}
+    ev = {"decision": "cautious_fight", "threat_ratio": 1.5}
+
+    assert _fallback(low, ev, KB_TEXT).get("source") == "kb"
+    assert _fallback(full, ev, KB_TEXT).get("source") != "kb"

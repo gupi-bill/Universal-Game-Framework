@@ -264,5 +264,16 @@ def test_learned_tactics_feed_decision(env):
     with open(res["kb_file"], encoding="utf-8") as f:
         body = f.read()
     tactics = knowledge_loop.extract_tactics(body)
-    assert "retreat" in tactics or "keep_distance" in tactics
-    assert knowledge_loop.apply_tactics("cautious_fight", tactics) == "defend"
+    # v2.0 P2：返回值是 (标签, 条件元组)。自由文本（视频学习产出）
+    # 的条件是内嵌式的 ——「低血量立即撤退」本身就带了触发条件。
+    tags = {t[0] for t in tactics}
+    assert tags & {"retreat", "keep_distance"}
+    assert all(len(t) == 2 and t[1] for t in tactics), "每个标签都应带条件"
+    # 低血 + 高威胁时应当生效
+    assert knowledge_loop.apply_tactics("cautious_fight", tactics,
+                                        hp_ratio=0.2, threat_ratio=1.5,
+                                        n_enemies=3) == "defend"
+    # 满血时不该生效（条件不满足）
+    assert knowledge_loop.apply_tactics("cautious_fight", tactics,
+                                        hp_ratio=1.0, threat_ratio=1.5,
+                                        n_enemies=3) == ""

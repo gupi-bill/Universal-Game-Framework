@@ -137,11 +137,14 @@ def test_kb_and_no_kb_can_diverge():
 def test_arena_has_discrimination():
     """默认难度下必须有区分度：全组都死就什么都测不出来。"""
     medians = []
+    all_rows = []
     for name in ("baseline", "no_kb", "kb"):
-        rows = [ab.run_one(name, s, 200, []) for s in range(10)]
+        rows = [ab.run_one(name, s, 200, [], difficulty="combat") for s in range(10)]
+        all_rows.append(rows)
         medians.append(statistics.median(r["rounds"] for r in rows))
-    assert len(set(medians)) > 1 or max(medians) - min(medians) >= 3, (
-        f"三组回合中位数几乎相同（{medians}），环境没有区分度")
+    # combat 档下回合数不再是好指标（赢了会提前撤离），所以主要看存活率
+    survs = [sum(1 for r in rows if r["survived"]) for rows in all_rows]
+    assert len(set(survs)) > 1, f"三组存活数完全相同（{survs}），环境没有区分度"
 
 
 def test_run_is_reproducible_across_calls():
@@ -176,3 +179,57 @@ def test_load_tactics_returns_list():
     """读不到知识库也要返回空列表，不能抛异常 —— 对照组依赖它。"""
     t = ab.load_tactics()
     assert isinstance(t, list)
+
+
+def test_knowledge_improves_survival_in_combat_difficulty():
+    """P2 的核心断言：知识组在 combat 档下确实比无知识组活得久。
+
+    这是 v2.0 P2 实证的正向结果（20+25+25 组 × 三批 seed 全部复现，
+    增益 +10~+20 个百分点）。如果这个测试开始失败，说明知识闭环退化了。
+
+    注意它跑 12 组而不是更多 —— 单测要快。完整实验请跑
+    `python ab_experiment.py --n 20`。
+    """
+    from ab_experiment import load_tactics
+    kb = load_tactics()
+    if not kb:
+        pytest.skip("知识库为空（无标签），对照组退化为同一策略")
+    surv_no = sum(1 for s in range(12)
+                  if ab.run_one("no_kb", s, 200, [], difficulty="combat")["survived"])
+    surv_kb = sum(1 for s in range(12)
+                  if ab.run_one("kb", s, 200, kb, difficulty="combat")["survived"])
+    assert surv_kb >= surv_no, (
+        f"知识组存活 {surv_kb}/12 不如无知识组 {surv_no}/12 —— "
+        "知识闭环可能退化，查 apply_tactics / knowledge_gate")
+
+
+def test_retreat_goes_toward_exfil_not_away_from_threat():
+    """v2.0 P2 第二轮修正：撤离点固定在一侧时，
+    「往离最近威胁最远」往往正好是撤离点的反方向。"""
+    from ab_experiment import _tactical_spot, DIFFICULTY
+    a = Arena(ArenaConfig(seed=2, **DIFFICULTY["combat"]))
+    exfil = a.cfg.exfil_x
+    assert exfil is not None
+    for d in ("retreat", "defend"):
+        assert _tactical_spot(a, d, []) == exfil, (
+            f"{d} 应朝撤离点 {exfil} 跑，而不是离威胁最远")
+
+
+def test_attack_actually_kills():
+    a = Arena(ArenaConfig(seed=3, enemies=4, attack_damage=4, ramp_step=0))
+    for _ in range(40):
+        if a.st.over or a.st.kills > 0:
+            break
+        a.step("attack")
+    assert a.st.kills > 0, "attack 没有任何杀伤力，集火类知识无法生效"
+
+
+def test_exfil_settles_as_survival():
+    a = Arena(ArenaConfig(seed=3, enemies=3, safe_hp_ratio=0.95,
+                          exfil_x=0.03, exfil_radius=0.2, ramp_step=0,
+                          contact_damage=5))
+    for _ in range(120):
+        if a.st.over:
+            break
+        a.step("move", 0.02)
+    assert a.st.exfiltrated and a.st.survived

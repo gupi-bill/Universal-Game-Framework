@@ -395,7 +395,8 @@ def _fallback_decide(game_state_str: str, combat_eval_str: str,
         kb_action = knowledge_loop.decide_action(
             decision, knowledge_loop.extract_tactics(kb_tactics),
             hp_ratio=hp_ratio, threat_ratio=threat_ratio,
-            has_allies=has_allies)
+            has_allies=has_allies,
+            n_enemies=len(state.get("entities") or []))
         if kb_action:
             return {"action": kb_action, "source": "kb"}
     except Exception:
