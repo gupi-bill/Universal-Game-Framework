@@ -204,22 +204,39 @@ def extract_tactics(text: str) -> list:
             if any(w in low for w in words)]
 
 
-def apply_tactics(decision: str, tactics: list) -> str:
+def apply_tactics(decision: str, tactics: list, has_allies: bool = False) -> str:
     """知识驱动的兜底决策：返回受知识影响的动作，无影响时返回空串。
 
     这是"命中条目真的进入决策"的落点 —— 没有它，无 LLM 时知识只进 prompt 不进动作。
+
+    v2.0 P2 实证修正 —— A/B 实验（30 组 × 200 回合）发现知识组比无知识组
+    **少活 8 回合**（67 vs 75）。逐回合统计定位到两处语义错误：
+
+      1. `retreat` 被无条件改写成 `defend`。但撤退与防守在这个动作空间里
+         不是一回事：撤退是脱离接触，防守是原地蹲守。面对围攻时"蹲守"
+         只会挨打，知识反而害了决策。
+      2. `protect_ally`（保护队友）在**没有队友**的场景也生效。
+         单机局里检索到的组队经验属于知识串味，不该影响决策。
+
+    现在：撤退类知识只影响"谨慎战斗"，不再把撤退本身变成防守；
+    队友类知识（protect_ally / focus_fire）需要 `has_allies=True` 才生效。
+
+    参数 `has_allies` 缺省 False，即"拿不准就当没有队友"——
+    错误的加成（无谓的跑路）代价高于漏掉的加成。
     """
     if not tactics:
         return ""
     t = set(tactics)
-    if decision == "retreat":
-        return "defend"
+    # 队友类标签只在真有队友时生效，避免单机局被组队经验误导
+    ally_tags = (t & {"protect_ally", "focus_fire"}) if has_allies else set()
+
     if decision == "cautious_fight":
-        # 知识里有撤退/保持距离类条目时，谨慎战斗降级为防守
+        # 谨慎时若知识里有「保持距离 / 撤退」，转为明确防守动作
         if t & {"retreat", "keep_distance"}:
             return "defend"
     if decision == "fight":
-        if t & {"focus_fire", "protect_ally"}:
+        # 只有在确实有队友时才谈集火与保护
+        if ally_tags:
             return "attack"
     return ""
 
@@ -254,18 +271,19 @@ def knowledge_gate(decision: str, tactics: list, hp_ratio: float = 1.0,
 
 
 def decide_action(decision: str, tactics: list, hp_ratio: float = 1.0,
-                  threat_ratio: float = 0.0) -> str:
+                  threat_ratio: float = 0.0, has_allies: bool = False) -> str:
     """闸门 + 规则映射：返回受知识影响的动作，未通过闸门返回空串。"""
     if not knowledge_gate(decision, tactics, hp_ratio, threat_ratio):
         return ""
-    return apply_tactics(decision, tactics)
+    return apply_tactics(decision, tactics, has_allies=has_allies)
 
 
 def decide_with_knowledge(decision: str, kb_text: str, stats: "LearningStats" = None,
-                          keyword: str = "", game: str = None) -> tuple:
+                          keyword: str = "", game: str = None,
+                          has_allies: bool = False) -> tuple:
     """``(动作, 是否引用了知识)``：命中且产生规则才算一次有效引用。"""
     tactics = extract_tactics(kb_text)
-    action = apply_tactics(decision, tactics)
+    action = apply_tactics(decision, tactics, has_allies=has_allies)
     cited = bool(action) and bool(tactics)
     if cited and stats is not None:
         stats.record_citation(keyword or "-")

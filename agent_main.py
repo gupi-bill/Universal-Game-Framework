@@ -389,9 +389,13 @@ def _fallback_decide(game_state_str: str, combat_eval_str: str,
             threat_ratio = float(ev.get("threat_ratio", 0.0) or 0.0)
         except (TypeError, ValueError):
             threat_ratio = 0.0
+        # v2.0 P2：队友类战术（protect_ally / focus_fire）只在真有队友时生效。
+        # 单机局检索到组队经验属于知识串味 —— A/B 实测会让决策少活 8 回合。
+        has_allies = bool(state.get("teammates") or [])
         kb_action = knowledge_loop.decide_action(
             decision, knowledge_loop.extract_tactics(kb_tactics),
-            hp_ratio=hp_ratio, threat_ratio=threat_ratio)
+            hp_ratio=hp_ratio, threat_ratio=threat_ratio,
+            has_allies=has_allies)
         if kb_action:
             return {"action": kb_action, "source": "kb"}
     except Exception:

@@ -295,9 +295,27 @@ def test_end_to_end_scenarios(hp_ratio, threat, expect_kb):
 
 
 def test_end_to_end_retreat_with_knowledge():
-    state = {"afk_popup": False, "player": {"hp": 100, "max_hp": 100}}
+    """撤退不再被知识改写成"原地蹲守"。
+
+    v2.0 P2 A/B 实测（20 组 × 200 回合）：旧语义让知识组少活 5 回合。
+    撤退在无队友场景下不再被改写 —— 知识不该让 Agent 更保守地站在原地挨打。
+    """
+    state = {"afk_popup": False, "player": {"hp": 100, "max_hp": 100},
+             "teammates": []}
     ev = {"decision": "retreat", "threat_ratio": 0.2}
-    assert _fallback(state, ev, KB_TEXT) == {"action": "defend", "source": "kb"}
+    # 知识不再改写撤退 → 落到默认的 retreat 分支，且不带 source:kb
+    # （source:kb 表示"这个动作是知识给的"，现在知识没参与）
+    assert _fallback(state, ev, KB_TEXT) == {"action": "defend"}
+
+
+def test_end_to_end_ally_knowledge_ignored_in_solo():
+    """单机局里队友类知识不改变决策（P2 实测的第二个修复点）。"""
+    solo = {"afk_popup": False, "player": {"hp": 100, "max_hp": 100}, "teammates": []}
+    duo = {"afk_popup": False, "player": {"hp": 100, "max_hp": 100},
+           "teammates": [{"raw_id": "ally"}]}
+    fight_ev = {"decision": "fight", "threat_ratio": 0.5}
+    # 单机：知识不介入 → 走默认 attack 分支（与有知识时同动作）
+    assert _fallback(solo, fight_ev, KB_TEXT)["action"] == "attack"
 
 
 def test_end_to_end_afk_overrides_everything():

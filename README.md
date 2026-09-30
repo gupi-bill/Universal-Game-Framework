@@ -270,7 +270,7 @@ python agent_cli.py -c mode     # 模式 / 感知后端 / LLM / VLM / 激活游�
 | 项 | 结论 | 复核命令 |
 |---|---|---|
 | Python 语法 | 全仓库 `compileall` 通过 | `bash scripts/check.sh --fast` |
-| 单元测试 | **991 用例全绿** | `python -m pytest tests/ -q` |
+| 单元测试 | **1009 用例全绿** | `python -m pytest tests/ -q` |
 | 启动自检 | 本机 ERROR 0 / WARN 6，每条附「修复 + 降级」指引 | `python boot_check.py` |
 | 游戏档案 | florr / space_invaders 两份 `--strict` 全过 | `python game_profile_check.py --all --strict` |
 | MCP 工具 | 16 个工具可注册 / 可调用 / schema 正确 + 知识库往返保真 | `python tools/mcp_tools_check.py --strict` |
@@ -278,6 +278,7 @@ python agent_cli.py -c mode     # 模式 / 感知后端 / LLM / VLM / 激活游�
 | 主循环 | 离线 5 轮跑通：感知 → 预判 → 决策 → 动作 → 记忆 → 复盘 → 汇报 | `UGF_DRY_RUN=1 python agent_main.py --rounds 5` |
 | 统一启动器 | UI 探测 / 选择 / 离线开关透传全部可验 | `python launcher.py --ui auto --selftest` |
 | 运维脚本 | 启停 dry-run 零副作用；日志轮转与临时清理已沙箱实测 | `bash start_all.sh --dry-run` |
+| **P2 闭环 A/B** | **证伪 ❌** —— 知识组比无知识组**少活 5 回合**；决策层本身 +16 回合 ✅ | `python ab_experiment.py --n 20` |
 
 ### 未验证（受本机环境限制，非代码缺陷）
 
@@ -288,6 +289,7 @@ python agent_cli.py -c mode     # 模式 / 感知后端 / LLM / VLM / 激活游�
 | 键鼠实际操作 | 无 GUI | dry-run 只记录不执行 |
 | 联网教程检索 / Webhook 推送 | 无外部 MCP、无网络 | 注入假 `requests`、返回降级提示 |
 | 容器镜像构建 | 本机无 docker | 仅静态口径对齐 + headless 替换 |
+| **真实对局中的知识增益** | 无实机（见上表 P2 行） | arena 模拟里已证伪：知识库现有内容有害 |
 | GUI 真实渲染（Tk / PyQt / Streamlit） | 无 X server / 未安装 | 仅验证可用性与命令构造 |
 
 **在 headless 机器（服务器 / 容器 / CI）上跑门禁**：`boot_check` 现在会把
@@ -295,6 +297,24 @@ python agent_cli.py -c mode     # 模式 / 感知后端 / LLM / VLM / 激活游�
 `DisplayConnectionError`），报 WARN 而非 ERROR，退出码 0。
 早期版本只捕获 `ImportError`，异常会直接冒出去让自检崩掉，
 在任何无显示器的机器上门禁恒红。
+
+### ⚠️ 已知问题：知识闭环当前**没有**产生增益
+
+A/B 实验（20 组 × 200 回合，离线 arena）给出的是**否定结论**：
+
+| 对照 | 回合中位数 |
+|------|----------|
+| baseline（无决策层） | 59.0 |
+| no_kb（有决策层，无知识） | **75.0** ✅ 决策层 +16 回合 |
+| kb（有决策层 + 知识） | 70.0 ❌ 知识 **−5** 回合 |
+
+逐条探针定位到元凶是知识库里的 `retreat` / `keep_distance` 标签 ——
+它们在这个场景**无适用面**。结论：**闭环是通的，但库存的是战术名词，
+不是「对这一局面真的有用」的经验。**
+
+下一步该怎么修见 [devplan/P2_AB_EXPERIMENT.md](devplan/P2_AB_EXPERIMENT.md) §7。
+
+复现：`python arena.py --self-test && python ab_experiment.py --n 20`
 
 冲刺全记录见 [devplan/PROGRESS.md](devplan/PROGRESS.md)，阶段计划见 [devplan/PLAN.md](devplan/PLAN.md)，运维口径见 [devplan/OPS.md](devplan/OPS.md)。
 

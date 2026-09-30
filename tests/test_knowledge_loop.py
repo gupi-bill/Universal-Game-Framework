@@ -144,14 +144,44 @@ def test_extract_tactics_on_miss_returns_empty():
     assert knowledge_loop.extract_tactics("未找到相关内容") == []
 
 
+# v2.0 P2 实证修正后（2026-09-30）：
+# 原断言要求 retreat→defend、fight→attack。P2 的 A/B 实验（20 组 × 200 回合）
+# 显示这两条语义是错的：知识组比无知识组少活 5 回合。
+# 逐回合统计定位到：撤退被改成"原地蹲守"，队友类经验在单机局也生效。
+# 见 devplan/P2_AB_EXPERIMENT.md。
+ALL_TAGS = ["retreat", "keep_distance", "focus_fire"]
+
+
 @pytest.mark.parametrize("decision,expected", [
-    ("retreat", "defend"),
-    ("cautious_fight", "defend"),   # 知识含保持距离 → 谨慎战斗降级为防守
-    ("fight", "attack"),
+    # 撤退**不再**被改写成防守：撤退是脱离接触，防守是原地蹲守，
+    # 面对围攻时"蹲守"只会挨打 —— 知识反而害了决策。
+    ("retreat", ""),
+    # 谨慎战斗时若知识里有"保持距离"，仍转为防守（这一条保留：语义正确）
+    ("cautious_fight", "defend"),
+    # 单机局（has_allies=False）里队友类知识不生效
+    ("fight", ""),
 ])
 def test_apply_tactics(decision, expected):
-    assert knowledge_loop.apply_tactics(decision, ["retreat", "keep_distance",
-                                                   "focus_fire"]) == expected
+    assert knowledge_loop.apply_tactics(decision, ALL_TAGS) == expected
+
+
+@pytest.mark.parametrize("decision,expected", [
+    ("retreat", ""),
+    ("cautious_fight", "defend"),
+    ("fight", "attack"),          # 有队友时集火才生效
+])
+def test_apply_tactics_with_allies(decision, expected):
+    """有队友时队友类知识才参与决策。"""
+    assert knowledge_loop.apply_tactics(decision, ALL_TAGS, has_allies=True) == expected
+
+
+def test_ally_tags_never_apply_without_allies():
+    """防回归：P2 实测的关键修复点 —— 单机局不该被组队经验影响。"""
+    for tag in ("focus_fire", "protect_ally"):
+        for decision in ("fight", "cautious_fight", "retreat"):
+            out = knowledge_loop.apply_tactics(decision, [tag], has_allies=False)
+            assert out in ("", "defend"), (
+                f"{tag} 在无队友场景下把 {decision} 改成了 {out}")
 
 
 def test_apply_tactics_without_knowledge_is_noop():
