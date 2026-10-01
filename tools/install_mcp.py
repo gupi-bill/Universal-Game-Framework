@@ -20,6 +20,7 @@ import argparse
 import json
 import os
 import subprocess
+import time
 import sys
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -30,17 +31,22 @@ TARGETS = {
     "workbuddy": {
         "desc": "WorkBuddy（本机 ~/.workbuddy/mcp.json）",
         "path": os.path.expanduser("~/.workbuddy/mcp.json"),
-        "kind": "json", "key": "mcpServers",
+        "kind": "json", "key": "mcpServers", "shape": "mcpServers",
     },
     "claude-desktop": {
         "desc": "Claude Desktop（Linux 路径）",
         "path": os.path.expanduser("~/.config/Claude/claude_desktop_config.json"),
-        "kind": "json", "key": "mcpServers",
+        "kind": "json", "key": "mcpServers", "shape": "mcpServers",
     },
     "opencode": {
-        "desc": "OpenCode（~/.config/opencode/opencode.json，mcp 段）",
-        "path": os.path.expanduser("~/.config/opencode/opencode.json"),
-        "kind": "json", "key": "mcp",
+        # opencode 实际用的是 .jsonc（允许注释与尾逗号）。
+        # 本机实测：只有 opencode.jsonc，install_mcp 认 opencode.json
+        # → 永远报「配置文件不存在」，用户会以为装不上。
+        # 两个路径都探测，用存在的那个。
+        "desc": "OpenCode（~/.config/opencode/opencode.jsonc，mcp 段）",
+        "paths": [os.path.expanduser("~/.config/opencode/opencode.jsonc"),
+                  os.path.expanduser("~/.config/opencode/opencode.json")],
+        "kind": "jsonc", "key": "mcp", "shape": "opencode",
     },
     "codex": {
         "desc": "Codex CLI（~/.codex/config.toml，TOML，本脚本只给指引）",
@@ -55,10 +61,30 @@ TARGETS = {
 }
 
 
-def entry(dry: bool = True) -> dict:
-    """生成 ugf 这一条 MCP 注册项。"""
+def entry(dry: bool = True, shape: str = "mcpServers") -> dict:
+    """生成 ugf 这一条 MCP 注册项。
+
+    不同宿主的 schema 并不一样，不能一份形状走天下（P3 的核心就是
+    「换宿主不改本项目代码」，那配置生成也必须按宿主分化）：
+
+    - ``mcpServers``（WorkBuddy / Claude Desktop / VS Code）：
+      ``{"command": 字符串, "args": [...], "env": {...}}``
+    - ``opencode``：``{"type": "local", "command": [可执行, ...参数],
+      "enabled": true, "environment": {...}}``
+      注意 command 是**数组**且环境变量键叫 environment。
+
+      本机 opencode 的既有配置（cli-anything）就是这个形状，
+      写错的话 opencode 认不出来。
+    """
     env = {"PYTHONUNBUFFERED": "1"}
     env["UGF_DRY_RUN"] = "1" if dry else "0"
+    if shape == "opencode":
+        return {
+            "type": "local",
+            "command": [sys.executable, SERVER_PY],
+            "enabled": True,
+            "environment": env,
+        }
     return {
         "command": sys.executable,
         "args": [SERVER_PY],
@@ -67,12 +93,68 @@ def entry(dry: bool = True) -> dict:
     }
 
 
-def _load(path: str) -> dict:
+def _strip_jsonc(text: str) -> str:
+    """把 JSONC（带 // 与 /* */ 注释、尾逗号）转成可 json.loads 的文本。
+
+    只做词法级剥离，不解析字符串字面量 —— 实现刻意保守：
+    对无法判定的情况宁可报错，也不要写坏用户的配置。
+    """
+    out = []
+    i, n = 0, len(text)
+    in_str = False
+    while i < n:
+        c = text[i]
+        if in_str:
+            out.append(c)
+            if c == "\\":
+                if i + 1 < n:
+                    out.append(text[i + 1])
+                    i += 2
+                    continue
+            elif c == '"':
+                in_str = False
+            i += 1
+            continue
+        if c == '"':
+            in_str = True
+            out.append(c)
+            i += 1
+            continue
+        if c == "/" and i + 1 < n:
+            if text[i + 1] == "/":
+                j = text.find("\n", i)
+                i = n if j < 0 else j
+                continue
+            if text[i + 1] == "*":
+                j = text.find("*/", i + 2)
+                i = n if j < 0 else j + 2
+                continue
+        out.append(c)
+        i += 1
+    cleaned = "".join(out)
+    # 去尾逗号（"a": 1, } → "a": 1 }）
+    import re as _re
+    return _re.sub(r",(\s*[}\]])", r"\1", cleaned)
+
+
+def _pick_path(spec: dict) -> str:
+    """TARGETS 里可以用 path（单个）或 paths（候选列表，优先存在的）。"""
+    paths = spec.get("paths") or [spec["path"]]
+    for p in paths:
+        if os.path.exists(p):
+            return p
+    return paths[0]
+
+
+def _load(path: str, kind: str = "json") -> dict:
     if not os.path.exists(path):
         return {}
     try:
         with open(path, "r", encoding="utf-8") as f:
-            return json.load(f) or {}
+            raw = f.read()
+        if kind == "jsonc":
+            raw = _strip_jsonc(raw)
+        return json.loads(raw or "{}") or {}
     except (json.JSONDecodeError, OSError) as e:
         raise SystemExit(f"❌ 读取配置失败 {path}: {e}")
 
@@ -80,17 +162,25 @@ def _load(path: str) -> dict:
 def cmd_list() -> int:
     print("可写入的 MCP 客户端目标：\n")
     for name, t in TARGETS.items():
-        p = t["path"]
+        p = _pick_path(t)
         exists = os.path.exists(p)
         registered = False
-        if exists and t["kind"] == "json":
+        if exists and t["kind"] in ("json", "jsonc"):
             try:
-                with open(p, "r", encoding="utf-8") as f:
-                    data = json.load(f) or {}
+                data = _load(p, t["kind"])
                 registered = "ugf" in (data.get(t["key"]) or {})
+            except SystemExit:
+                registered = False
             except Exception:
                 registered = False
-        flag = "✅ 已注册 ugf" if registered else ("— 未注册" if exists else "— 配置文件不存在")
+        if t["kind"] == "toml":
+            flag = "ℹ 只给指引"
+        elif registered:
+            flag = "✅ 已注册 ugf"
+        elif exists:
+            flag = "— 未注册"
+        else:
+            flag = "— 配置文件不存在"
         print(f"  {name:<15} {flag:<18} {p}")
         print(f"                  {t['desc']}")
     print("\n用法： python tools/install_mcp.py --target <name> [--dry-run] [--remove]")
@@ -134,11 +224,27 @@ def cmd_check() -> int:
         {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
     ]
     stdin_data = "".join(json.dumps(p) + "\n" for p in payloads)
+
+    # stdio 握手偶发失败：服务启动要 import 一堆依赖（mcp/numpy/flask），
+    # 机器负载高时（比如 CI 上刚跑完上千个用例）可能 90 秒不够或输出错乱。
+    # 重试两次再判失败 —— 一个会误报的体检比没有体检更糟。
+    out = ""
+    p = None
+    for attempt in range(3):
+        try:
+            env = dict(os.environ, UGF_DRY_RUN="1")
+            p = subprocess.run([sys.executable, SERVER_PY], input=stdin_data,
+                               capture_output=True, text=True, env=env, timeout=90)
+            out = p.stdout
+            if '"name"' in out or '"tools"' in out:
+                break
+        except subprocess.TimeoutExpired:
+            out = ""
+        if attempt < 2:
+            print(f"   … 握手第 {attempt + 1} 次未拿到工具清单，3 秒后重试")
+            time.sleep(3)
+
     try:
-        env = dict(os.environ, UGF_DRY_RUN="1")
-        p = subprocess.run([sys.executable, SERVER_PY], input=stdin_data,
-                           capture_output=True, text=True, env=env, timeout=90)
-        out = p.stdout
         names = set()
         for line in out.splitlines():
             if '"name"' in line and '"tools"' not in line:
@@ -206,8 +312,8 @@ def cmd_install(name: str, custom_path: str, dry_run: bool,
         print('env = { UGF_DRY_RUN = "1" }\n')
         return 0
 
-    path = t["path"]
-    data = _load(path)
+    path = _pick_path(t)
+    data = _load(path, t.get("kind", "json"))
     bucket = data.setdefault(t["key"], {})
 
     if remove:
@@ -222,7 +328,7 @@ def cmd_install(name: str, custom_path: str, dry_run: bool,
         print(f"✅ 已移除 {path} 的 ugf 注册")
         return 0
 
-    bucket["ugf"] = entry(dry=dry)
+    bucket["ugf"] = entry(dry=dry, shape=t.get("shape", "mcpServers"))
     text = json.dumps(data, ensure_ascii=False, indent=2)
     if dry_run:
         print(f"[dry-run] 将写入 {path}：\n")
@@ -238,11 +344,21 @@ def cmd_install(name: str, custom_path: str, dry_run: bool,
 
 
 def _write(path: str, data: dict):
+    """写回配置。先备份 —— 直接改用户的 MCP 配置不能没有回头路。"""
     d = os.path.dirname(path)
     if d:
         os.makedirs(d, exist_ok=True)
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                old = f.read()
+            with open(path + ".bak", "w", encoding="utf-8") as f:
+                f.write(old)
+        except OSError:
+            pass
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+        f.write("\n")
 
 
 def main() -> int:

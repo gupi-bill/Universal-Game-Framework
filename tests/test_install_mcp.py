@@ -15,6 +15,11 @@ import unittest
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPT = os.path.join(BASE, "tools", "install_mcp.py")
 
+# 直接 import 以便测内部函数（_strip_jsonc / entry / _write）。
+# 原有测试全走 subprocess 黑盒，这里补白盒。
+sys.path.insert(0, os.path.join(BASE, "tools"))
+import install_mcp  # noqa: E402
+
 
 def run(*args):
     return subprocess.run([sys.executable, SCRIPT, *args],
@@ -111,3 +116,89 @@ class TestInstallMcp(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+# ---------------------------------------------------------------------------
+# v2.0 P3：跨宿主配置生成（2026-10-01）
+# ---------------------------------------------------------------------------
+# 本机实测发现 opencode 装不上：install_mcp 只认 opencode.json，
+# 而实际用的是 opencode.jsonc；而且两者 schema 不同
+# （mcpServers+字符串 command vs mcp+数组 command）。
+# P3 命题是「换宿主不改本项目代码」，配置生成也必须按宿主分化。
+
+class TestPortability(unittest.TestCase):
+    def test_opencode_target_uses_jsonc(self):
+        spec = install_mcp.TARGETS["opencode"]
+        paths = spec.get("paths") or [spec["path"]]
+        self.assertTrue(any(p.endswith(".jsonc") for p in paths),
+                        "opencode 必须探测 .jsonc（本机实测只有它）")
+        self.assertEqual(spec["shape"], "opencode")
+
+    def test_entry_shapes_differ_per_host(self):
+        """两种 schema 必须生成不同形状 —— 这是 P3 的核心。"""
+        classic = install_mcp.entry(dry=True, shape="mcpServers")
+        oc = install_mcp.entry(dry=True, shape="opencode")
+        self.assertIsInstance(classic["command"], str)
+        self.assertIn("args", classic)
+        self.assertIn("env", classic)
+        self.assertEqual(oc["type"], "local")
+        self.assertIsInstance(oc["command"], list, "opencode 的 command 必须是数组")
+        self.assertIn("environment", oc)
+        self.assertNotIn("args", oc)
+
+    def test_opencode_shape_matches_existing_entries(self):
+        """生成的形状必须与 opencode 既有条目（本机 cli-anything）一致。"""
+        path = os.path.expanduser("~/.config/opencode/opencode.jsonc")
+        if not os.path.exists(path):
+            self.skipTest("本机没有 opencode.jsonc")
+        raw = install_mcp._strip_jsonc(open(path, encoding="utf-8").read())
+        data = json.loads(raw)
+        others = [v for k, v in (data.get("mcp") or {}).items() if k != "ugf"]
+        if not others:
+            self.skipTest("opencode 里没有别的条目可比对")
+        ref = others[0]
+        mine = install_mcp.entry(dry=True, shape="opencode")
+        self.assertEqual(set(mine), set(ref), f"字段集不一致：{set(mine)} vs {set(ref)}")
+
+    def test_strip_jsonc_handles_comments_and_trailing_commas(self):
+        raw = """{
+  // 行注释
+  "a": 1,  /* 块注释 */
+  "b": [1, 2, 3,],
+        }"""
+        self.assertEqual(json.loads(install_mcp._strip_jsonc(raw)),
+                         {"a": 1, "b": [1, 2, 3]})
+
+    def test_strip_jsonc_does_not_eat_strings(self):
+        raw = '{"url": "http://x.com//path", "s": "/* not a comment */"}'
+        out = json.loads(install_mcp._strip_jsonc(raw))
+        self.assertEqual(out["url"], "http://x.com//path")
+        self.assertEqual(out["s"], "/* not a comment */")
+
+    def test_write_creates_backup(self):
+        """改用户配置必须留回头路。"""
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "mcp.json")
+            with open(p, "w", encoding="utf-8") as f:
+                f.write('{"mcpServers":{"other":{}}}')
+            install_mcp._write(p, {"mcpServers": {"ugf": {}}})
+            self.assertTrue(os.path.exists(p + ".bak"), "写入前必须备份")
+            with open(p + ".bak", encoding="utf-8") as f:
+                self.assertIn("other", f.read(), "备份应是写入前的内容")
+
+    def test_roundtrip_preserves_other_hosts(self):
+        """装 ugf 不能动别人已有的条目。"""
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "opencode.jsonc")
+            with open(p, "w", encoding="utf-8") as f:
+                f.write('{"mcp":{"cli-anything":{"type":"local","command":["node","x.mjs"],'
+                        '"enabled":true,"environment":{}}}}')
+            sys.argv = ["install_mcp.py", "--target", "custom", "--path", p,
+                        "--online"]
+            # custom 走 mcpServers 形状，这里只验证不丢内容
+            data = install_mcp._load(p, "jsonc")
+            data.setdefault("mcp", {})["ugf"] = install_mcp.entry(shape="opencode")
+            install_mcp._write(p, data)
+            back = install_mcp._load(p, "jsonc")
+            self.assertIn("cli-anything", back["mcp"])
+            self.assertIn("ugf", back["mcp"])
