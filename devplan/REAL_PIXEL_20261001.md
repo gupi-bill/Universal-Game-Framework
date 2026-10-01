@@ -45,7 +45,25 @@ _take_screenshot → True
 「继承的 DISPLAY 为空」是关键 —— 说明探测逻辑自己找到了可用显示，
 不是靠我手工设 `DISPLAY=:1` 蒙对的。
 
-截图存于 `devplan/REAL_SCREENSHOT_20261001.png`。
+**截图本身不入库**：`.gitignore` 全局忽略 `*.png`，而且真实桌面截图
+将来可能含窗口标题、文件名等隐私内容。仓库里只留这份「测量记录」。
+
+需要复现证据时，本机跑这段即可：
+
+```python
+import sys, os, tempfile
+sys.path.insert(0, ".")
+os.environ.pop("DISPLAY", None)      # 验证探测能自己找到可用显示
+import perception_server as ps
+p = os.path.join(tempfile.gettempdir(), "evidence.png")
+assert ps._take_screenshot(p)
+from PIL import Image
+im = Image.open(p)
+g = im.convert("L").histogram()
+print(im.size, "非黑像素", sum(g[10:]))
+```
+
+2026-10-01 本机实测输出：`1366×768 非黑像素 1048065`。
 
 ## 4. 端到端（真实像素 + stub 检测）
 
