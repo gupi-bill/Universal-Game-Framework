@@ -12,6 +12,7 @@ S16 · 参考适配器模板与档案规范固化 —— tests/test_add_game.py
 """
 import os
 import re
+import unittest
 import subprocess
 import sys
 
@@ -244,3 +245,109 @@ def test_cli_print_has_no_residue():
     assert parsed["game"]["name"] == "cli_game"
     assert re.search(r"(?m)^  combat$", out.stdout) is None  # 列表项必须带 "- "
     assert "- combat" in out.stdout
+
+
+# ---------------------------------------------------------------------------
+# v2.0 P1 实测（2026-10-01）：两个真 bug
+# ---------------------------------------------------------------------------
+
+class TestSanitizeName(unittest.TestCase):
+    r"""`_sanitize_name` 的词边界不能被压平。
+
+    原来的 `re.sub(r"[^\w.-]+", "_", ...)` 把整串当一个整体替换，
+    "roguelike dungeon crawler" → "roguelike_dungeon_crawler"，
+    词边界彻底丢失。游戏名常是多词短语，压平后既难读也可能撞名。
+    """
+
+    def _f(self):
+        import importlib
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "tools"))
+        import add_game
+        return importlib.reload(add_game)._sanitize_name
+
+    def test_keeps_word_boundaries(self):
+        f = self._f()
+        self.assertEqual(f("roguelike dungeon crawler"), "roguelike_dungeon_crawler")
+        self.assertEqual(f("stardew like"), "stardew_like")
+
+    def test_hyphen_and_space_both_split(self):
+        f = self._f()
+        self.assertEqual(f("soulslike-like action rpg"), "soulslike_like_action_rpg")
+
+    def test_collapses_repeated_separators(self):
+        f = self._f()
+        self.assertEqual(f("a  b   c"), "a_b_c")
+
+    def test_trims_and_falls_back(self):
+        f = self._f()
+        self.assertEqual(f("  florr  "), "florr")
+        self.assertEqual(f(""), "florr")
+        self.assertEqual(f("!!!"), "florr")
+
+    def test_does_not_raise_syntax_warning(self):
+        """docstring 里有正则示例，普通字符串会触发 SyntaxWarning。"""
+        import warnings
+        import importlib
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "tools"))
+        import add_game
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", SyntaxWarning)
+            importlib.reload(add_game)
+
+
+class TestArgvHandling(unittest.TestCase):
+    """`--help` 曾经会真的生成一份 help.yaml 并切换 config.yaml。
+
+    一个查帮助的操作产生副作用 —— 而且把当前游戏改成了 `help`，
+    下次启动会读一份空档案。
+    """
+
+    def _run(self, argv):
+        import importlib
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "tools"))
+        import add_game
+        importlib.reload(add_game)
+        old = sys.argv
+        sys.argv = ["add_game.py"] + argv
+        try:
+            return add_game.main()
+        finally:
+            sys.argv = old
+
+    def test_help_exits_zero_without_side_effects(self):
+        cfg = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "config.yaml")
+        before = open(cfg, encoding="utf-8").read() if os.path.exists(cfg) else ""
+        self.assertEqual(self._run(["--help"]), 0)
+        after = open(cfg, encoding="utf-8").read() if os.path.exists(cfg) else ""
+        self.assertEqual(before, after, "--help 不该改动 config.yaml")
+
+    def test_help_creates_no_profile(self):
+        prof = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "game_profiles", "help.yaml")
+        if os.path.exists(prof):
+            os.remove(prof)
+        self._run(["--help"])
+        self.assertFalse(os.path.exists(prof), "--help 不该生成 game_profiles/help.yaml")
+
+    def test_unknown_flag_rejected(self):
+        self.assertEqual(self._run(["--bogus"]), 2)
+
+    def test_no_args_shows_usage(self):
+        self.assertEqual(self._run([]), 2)
+
+
+class TestRequiresPython(unittest.TestCase):
+    """requires-python 必须写实测过的下限，不写没验证过的承诺。"""
+
+    def test_matches_verified_floor(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        text = open(os.path.join(root, "pyproject.toml"), encoding="utf-8").read()
+        m = re.search(r'requires-python\s*=\s*"([^"]+)"', text)
+        self.assertIsNotNone(m, "pyproject.toml 缺 requires-python")
+        # 2026-10-01 实测：3.12 与 3.13 可用，3.9 装不下
+        self.assertIn("3.10", m.group(1),
+                      f"requires-python={m.group(1)} 与实测不符")

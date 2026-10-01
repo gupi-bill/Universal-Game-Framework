@@ -9,7 +9,13 @@ name = "universal-game-framework"
 version = "2.1.0"
 description = "不是 Agent —— 装到别的 Agent 上的游戏能力包（MCP 服务）"
 readme = "README.md"
-requires-python = ">=3.9"
+# v2.0 实测（2026-10-01）：已验证 3.12 与 3.13（干净 uv 环境，
+# 9/9 模块导入 + MCP 握手 16 工具，零改动）。
+# 3.9 未验证 —— 当时装不下（磁盘只剩 708MB）。
+# 代码里有大量 `dict[str, str]` 注解，但 10 个模块都有
+# `from __future__ import annotations`，因此注解不在运行时求值。
+# 这里写实测过的下限，不写没验证过的承诺。
+requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "gupi-bill" }]
 keywords = ["mcp", "game", "agent", "yolo", "automation"]

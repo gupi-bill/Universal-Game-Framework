@@ -201,8 +201,29 @@ def _parse_floats(text: str) -> list:
 
 
 def _sanitize_name(name: str) -> str:
-    """游戏名即文件名，必须与 game.name 一致 → 只保留安全字符。"""
-    cleaned = re.sub(r"[^\w.-]+", "_", (name or "").strip()).strip("._-")
+    r"""游戏名即文件名，必须与 game.name 一致 → 只保留安全字符。
+
+    v2.0 P1 实测发现一个坑：原来的
+        re.sub(r"[^\w.-]+", "_", "roguelike dungeon crawler")
+    会得到 ``roguelike_dungeon_crawler`` —— **三个词被压成一个标识符**，
+    词边界彻底丢失。游戏名往往是多词短语（"roguelike dungeon crawler"、
+    "soulslike action rpg"），压平之后既难读也可能撞名。
+
+    现在按空白/连字符切成词，词内清理非法字符，词间统一用 ``_`` 连接：
+
+        "roguelike dungeon crawler"  → roguelike_dungeon_crawler
+        "Soulslike-like Action RPG" → soulslike-like_action_rpg
+        "  florr  "                   → florr
+    """
+    raw = (name or "").strip()
+    # 先按分隔符切词，保留词边界
+    words = re.split(r"[\s\-]+", raw)
+    out_words = []
+    for w in words:
+        w = re.sub(r"[^\w.]+", "", w)      # 词内只留字母数字下划线点
+        if w:
+            out_words.append(w)
+    cleaned = "_".join(out_words).strip("._-")
     return cleaned or "florr"
 
 
@@ -462,12 +483,42 @@ def selfcheck(name: str) -> tuple:
     return detail["ok"] and not detail["warnings"], problems
 
 
+USAGE = """用法：
+  python tools/add_game.py <游戏名>            # 生成档案并设为当前游戏
+  python tools/add_game.py <游戏名> --no-activate   # 只生成，不改 config.yaml
+  python tools/add_game.py <游戏名> --print         # 只打印 YAML，不落盘
+  python tools/add_game.py --help                  # 显示本帮助
+
+游戏名会被安全化（去空格/非法字符），且必须与档案里的 game.name 一致。
+"""
+
+
+def _looks_like_flag(a: str) -> bool:
+    return a.startswith("--")
+
+
 def main():
-    args = [a for a in sys.argv[1:] if a != "--no-activate"]
-    print_only = "--print" in args
-    args = [a for a in args if a != "--print"]
-    no_activate = "--no-activate" in sys.argv[1:]
+    raw = sys.argv[1:]
+    # v2.0：原来没有参数解析，`--help` 会被当成游戏名，
+    # 于是真的生成了一份 game_profiles/help.yaml 并把 config.yaml 的
+    # agent.game 切成了 help —— 一个查帮助的操作产生了副作用。
+    if any(a in ("--help", "-h") for a in raw):
+        print(USAGE)
+        return 0
+    unknown = [a for a in raw if _looks_like_flag(a)
+               and a not in ("--no-activate", "--print")]
+    if unknown:
+        print(f"❌ 未知参数: {' '.join(unknown)}\n")
+        print(USAGE)
+        return 2
+
+    print_only = "--print" in raw
+    no_activate = "--no-activate" in raw
+    args = [a for a in raw if not _looks_like_flag(a)]
     name_arg = args[0] if args else ""
+    if not name_arg and not print_only:
+        print(USAGE)
+        return 2
     data = collect(name_arg)
     text = render_yaml(data)
     if print_only:
