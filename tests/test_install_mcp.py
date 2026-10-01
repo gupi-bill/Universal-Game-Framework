@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPT = os.path.join(BASE, "tools", "install_mcp.py")
@@ -202,3 +203,82 @@ class TestPortability(unittest.TestCase):
             back = install_mcp._load(p, "jsonc")
             self.assertIn("cli-anything", back["mcp"])
             self.assertIn("ugf", back["mcp"])
+
+
+# ---------------------------------------------------------------------------
+# v2.0 P3 第二层：宿主 LLM 真实调用（2026-10-01）
+# ---------------------------------------------------------------------------
+# verify_portability 只验到协议层（服务能起、工具在）。
+# 这里验的是「宿主 LLM 真的会用这些工具」—— 那才是 P3 的真正含义。
+
+class TestLiveUsage(unittest.TestCase):
+    def _mod(self):
+        sys.path.insert(0, os.path.join(BASE, "tools"))
+        import verify_live_usage
+        return verify_live_usage
+
+    def test_probe_expectations_are_ugf_specific(self):
+        """探针的判据必须是 ugf 独有的内容，不能是通用词。
+
+        否则模型编也能过 —— 那是假阳性，比没验更糟。
+        """
+        m = self._mod()
+        generic = {"tool", "list", "data", "file", "result", "content", "None"}
+        for pr in m.PROBES:
+            self.assertTrue(pr["expect_any"], f"{pr['name']} 没有判据")
+            for k in pr["expect_any"]:
+                self.assertNotIn(k.lower(), generic,
+                                 f"{pr['name']} 的判据 {k!r} 过于通用")
+        # 至少一个判据要含 ugf 知识库里真实存在的字符串
+        all_exp = {k for pr in m.PROBES for k in pr["expect_any"]}
+        self.assertTrue(all_exp & {"kb_export", "boss_behavior_log", "mantis"},
+                        "判据必须锚定 ugf 的独有数据")
+
+    def test_probes_cover_different_tools(self):
+        """三个探针打三个不同工具，避免「一个工具能用就算过」。"""
+        m = self._mod()
+        names = [p["name"] for p in m.PROBES]
+        self.assertEqual(len(names), len(set(names)))
+        self.assertGreaterEqual(len(names), 3)
+
+    def test_prompts_demand_verbatim(self):
+        """prompt 必须要求「原样贴出」，否则模型会自己总结成通用话术。"""
+        m = self._mod()
+        for pr in m.PROBES:
+            self.assertTrue("原样" in pr["prompt"], f"{pr['name']} 没要求原样输出")
+
+    def test_returns_2_when_opencode_absent(self):
+        """环境不具备时必须返回 2，不能返回 0 假装通过。
+
+        门禁里「环境不具备」要被单独标记，混进「通过」就是自欺。
+        """
+        m = self._mod()
+        import io
+        import contextlib
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = m.main(["--json", "--opencode-bin", "/nonexistent/opencode"])
+        self.assertEqual(rc, 2, "找不到 opencode 时应返回 2（环境不具备）")
+        self.assertIn("no_env", buf.getvalue())
+
+    def test_guesses_are_ugf_only(self):
+        """判据字符串必须能在本仓库里找到出处，不能凭空编。"""
+        m = self._mod()
+        kb = os.path.join(BASE, "knowledge_md")
+        self.assertTrue(os.path.isdir(kb), "知识库目录不在，P3 实证失去意义")
+        found_any = False
+        for root, _dirs, files in os.walk(kb):
+            for fn in files:
+                if not fn.endswith(".md"):
+                    continue
+                try:
+                    body = open(os.path.join(root, fn), encoding="utf-8",
+                                errors="replace").read()
+                except OSError:
+                    continue
+                if "mantis" in body:
+                    found_any = True
+                    break
+            if found_any:
+                break
+        self.assertTrue(found_any, "知识库里没有 mantis 记录，query_boss_history 探针无意义")

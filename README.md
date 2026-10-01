@@ -318,8 +318,20 @@ python agent_cli.py -c mode     # 模式 / 感知后端 / LLM / VLM / 激活游�
 复现：`python tools/install_mcp.py --list` 看各宿主现状，
 `python tools/verify_portability.py` 验一致性。
 
-⚠️ 限定：只验到 stdio 协议层。**「宿主 LLM 是否真的会用这些工具」还没验**，
-那需要真实对话，是 P3 的下一步。
+**第二层：宿主 LLM 真的会用**（`tools/verify_live_usage.py`）
+
+不只是「工具在列表里」—— 让 opencode 自己的模型去调，取回的数据
+必须来自 ugf：
+
+| 探针 | 判据（ugf 独有） | 结果 |
+|------|------------------|------|
+| `ugf_guide` | 含 `kb_export` / `kb_import` | ✓ |
+| `kb_list` | 含 `boss_behavior_log` / `learning_stats` | ✓ |
+| `query_boss_history` | mantis 的 BOSS 行为记录 | ✓ |
+
+**3/3 通过。** `opencode mcp list` 也自报 `✓ ugf connected`。
+
+⚠️ 限定：**跨机器（换 OS / Python 版本）未验**，宿主长期升级后的兼容性未验。
 
 ---
 

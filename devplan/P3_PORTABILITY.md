@@ -107,3 +107,80 @@ python tools/verify_portability.py --json   # 进 CI
 
 第 1 条最关键 —— 现在证明的是「服务能起来、工具在」，
 还没证明「换了宿主，LLM 用起来一样顺手」。
+
+
+---
+
+## 8. 第二层实证（2026-10-01 补）：宿主 LLM 真的会用
+
+§4 的 `verify_portability.py` 只验到**协议层** —— 按各宿主配置把服务
+拉起来、拿到工具清单。那证明「服务能起、工具在」。
+
+但 P3 真正要问的是：**换了宿主，那套能力用起来一样顺手吗？**
+只有宿主自己的 LLM 真的调一次才算数。
+
+### 8.1 opencode 自己就报 connected
+
+```
+$ opencode mcp list
+●  ✓ cli-anything connected
+●  ✓ ugf       connected
+    /home/g-bill/.workbuddy/binaries/python/envs/ugf/bin/python
+    /home/g-bill/文档/Default Project/Universal-Game-Framework/mcp_server.py
+└  2 server(s)
+```
+
+这不是我模拟的握手 —— 是 opencode 真实拉起进程并连接成功。
+注意工具名被 opencode 自动加了 `ugf_` 前缀（`ugf_kb_list`），
+说明宿主在正确处理多 MCP 服务的工具名冲突。
+
+### 8.2 三个探针，全部取得 ugf 独有数据
+
+新增 `tools/verify_live_usage.py`：调 `opencode run`，让宿主自己的
+模型去调 ugf 工具，再检查返回内容是否**真的来自 ugf**。
+
+| 探针 | 判据（ugf 独有） | 结果 |
+|------|------------------|------|
+| `ugf_guide` | 返回含 `kb_export` / `kb_import` | ✓ |
+| `kb_list` | 返回含 `boss_behavior_log` / `learning_stats` | ✓ |
+| `query_boss_history` | 返回 mantis 的行为记录 | ✓ |
+
+**3/3 通过。**
+
+其中 `query_boss_history` 返回的是真实知识库内容：
+
+```
+# BOSS 行为观察 — 20260922_013151
+- 01:31:50 mantis(Super) 位置(1700.0,800.0) 预判(None,None) 决策=retreat
+## 行为归纳（多次遭遇累计共性）
+- mantis(Super): 直线移动；平均距离玩家约 784px；近距离接近 0 次
+```
+
+带时间戳、带位置坐标、带行为归纳 —— 这些不可能是模型编的。
+反向测试也确认了：单独问 `kb_list` 时返回
+`review_20260922_012845.md`、`s9_probe.md`、`smoke_s8.md`
+等只存在于 ugf 知识库的文件名。
+
+### 8.3 为什么不用 mock 掉 LLM
+
+要验的就是「LLM 会不会用」。mock 掉 LLM 等于没验。
+
+所以脚本在环境不具备（没装 opencode / 无可用模型 / ugf 未注册）
+时返回**2（环境不具备）**，而不是 0（通过）——
+门禁里「不具备」该被单独标记，混进「通过」就是自欺。
+
+判据也刻意收窄：`expect_any` 只允许 ugf 独有的字符串，
+单测里明确禁止 `tool` / `list` / `data` 这类通用词，
+并要求判据必须能在本仓库 `knowledge_md/` 里找到出处。
+
+### 8.4 P3 现在的完整状态
+
+| 层次 | 验证内容 | 状态 |
+|------|---------|------|
+| 协议层 | 按各宿主配置拉起服务，工具集一致 | ✓ 3 宿主 × 16 工具 |
+| 应用层 | 宿主 LLM 真的调用并取得真实数据 | ✓ 3/3 探针 |
+| 跨机器 | 换 OS / 换 Python 版本 | ❌ 未验 |
+| 长期 | 宿主升级后是否仍兼容 | ❌ 未验 |
+
+**结论：P3 在「同一台机器、两个不同宿主」上成立。
+跨机器与跨版本仍未验证。**
