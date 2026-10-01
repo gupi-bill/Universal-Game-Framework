@@ -75,11 +75,46 @@ def test_core_missing_lib_is_error(monkeypatch):
     assert any(i["level"] == "ERROR" and "numpy" in i["msg"] for i in issues)
 
 
-def test_headless_report_gives_degrade_not_error():
+def test_headless_report_gives_degrade_not_error(monkeypatch, tmp_path):
+    """缺图形环境 / 缺权重时，必须给 WARN + 降级指引（而不是 ERROR）。
+
+    注意：这个测试**不能依赖本机环境**。早先版本直接调 `_headless_report()`，
+    断言"本机一定没有 X server 也没有权重"—— 一旦在真机上装了 yolov8n.pt
+    （以及 X socket 真实存在），_headless_report() 就正确地返回空列表，
+    测试反而挂了。环境假设不能当断言。
+    这里用 monkeypatch 把两个条件强制成"缺失"，验证契约本身。
+    """
+    monkeypatch.setattr(boot_check.os, "listdir", lambda p: [])
+    monkeypatch.setattr(boot_check.os.path, "isdir", lambda p: False)
+    monkeypatch.setattr(boot_check.shutil, "which", lambda n: None)
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.setattr(boot_check, "BASE_DIR", str(tmp_path))
+
     out = boot_check._headless_report()
-    assert out, "本机无 X server / 无权重，应产出降级提示"
+    assert out, "强制无图形环境且无权重时，应产出降级提示"
     assert all(i["level"] == "WARN" for i in out)
     assert all(i.get("degrade") for i in out)
+    # 两条降级路径都要在：图形环境 + 权重
+    assert len(out) == 2, f"应恰好报 2 条（图形环境 / 权重），实际 {len(out)}"
+
+
+def test_headless_report_empty_when_all_present(monkeypatch, tmp_path):
+    """对照组：图形环境和权重都在时，_headless_report() 应返回空（不误报）。
+
+    这是上一条的补集 —— 保证上面的 monkeypatch 是在测分支，
+    而不是把实现改成永远返回 2 条。
+    """
+    models = tmp_path / "models"
+    models.mkdir()
+    (models / "yolov8n.pt").write_bytes(b"x")
+
+    monkeypatch.setenv("DISPLAY", ":99")
+    monkeypatch.setattr(boot_check.os, "listdir",
+                        lambda p: ["X0"] if p == "/tmp/.X11-unix" else ["yolov8n.pt"])
+    monkeypatch.setattr(boot_check.os.path, "isdir", lambda p: True)
+    monkeypatch.setattr(boot_check, "BASE_DIR", str(tmp_path))
+
+    assert boot_check._headless_report() == [], "条件齐备时不应再报降级"
 
 
 def test_strict_promotes_warn_to_error():

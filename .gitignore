@@ -104,3 +104,6 @@ desktop.ini
 # 外部依赖仓库（自行 clone，见 README「外部依赖」一节）。
 # 本地放的是 stub 脚本，用于验证「真实截图 → 契约」链路，不是真 YOLO。
 florr_powerful_tools/
+
+# YOLO 权重（6MB 二进制，体积大不入库；用下方命令获取）
+models/
