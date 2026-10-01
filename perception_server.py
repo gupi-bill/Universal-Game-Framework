@@ -29,6 +29,7 @@ import json
 import math
 import os
 import shutil
+import tempfile
 import subprocess
 import sys
 import time
@@ -117,10 +118,80 @@ def configured_backend() -> str:
     return b if b in VALID_BACKENDS else "auto"
 
 
+#: 候选截图程序，按「跨桌面环境可靠性」排序。
+#:
+#: v2.0 真机实测发现两个问题：
+#:   1. 旧顺序把 ImageMagick 的 `import` 排在 `gnome-screenshot` 前面。
+#:      本机 `import` 已损坏（退出码非 0、不产文件），于是探测阶段
+#:      「看它存在」就选了它，真正截图时必然失败 —— 而 `gnome-screenshot`
+#:      是好的，却被跳过。
+#:   2. Wayland 会话下 XWayland 通常在 `:1`，`:0` 反而可能没有授权。
+#:      所以不再信任继承来的 DISPLAY。
+#:
+#: 现在的做法：**挨个真试一遍**，用第一个能产出文件的。
+#: 探测阶段不再靠 shutil.which 猜。
+_SCREENSHOT_CANDIDATES = ("gnome-screenshot", "scrot", "import", "maim")
+
+
+def _screenshot_cmd(tool: str, path: str) -> list:
+    """按工具名拼出命令行。"""
+    if tool == "gnome-screenshot":
+        return [tool, "-f", path]
+    if tool == "scrot":
+        return [tool, "-o", path]
+    if tool == "import":
+        return [tool, "-window", "root", path]
+    if tool == "maim":
+        return [tool, path]
+    return [tool, path]
+
+
+def _displays_to_try() -> list:
+    """候选 DISPLAY 值。
+
+    继承来的先试（用户可能已经设对了），再试 Xwayland 常见的 :1。
+    """
+    out = []
+    cur = os.environ.get("DISPLAY")
+    if cur:
+        out.append(cur)
+    for d in (":1", ":0"):
+        if d not in out:
+            out.append(d)
+    return out
+
+
+def _try_screenshot(tool: str, path: str) -> bool:
+    """用指定工具 + 指定 DISPLAY 截一次图，产出文件才算成功。"""
+    if not shutil.which(tool):
+        return False
+    env = dict(os.environ)
+    for display in _displays_to_try():
+        if not display:
+            continue
+        env["DISPLAY"] = display
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+            subprocess.run(_screenshot_cmd(tool, path), check=True,
+                           capture_output=True, timeout=8, env=env)
+            if os.path.exists(path) and os.path.getsize(path) > 0:
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def _screenshot_tool() -> str:
-    """返回可用的截图程序名，没有则返回空串。"""
-    for name in ("scrot", "import", "gnome-screenshot"):
-        if shutil.which(name):
+    """挨个试候选截图程序，返回第一个真正能用的。
+
+    与旧实现的关键区别：旧版只看「程序在不在 PATH 里」，
+    坏掉的程序也会被选中。本机实测 `import` 存在但不可用，
+    旧逻辑必然选它，然后每帧截图都失败。
+    """
+    for name in _SCREENSHOT_CANDIDATES:
+        if _try_screenshot(name, os.path.join(
+                tempfile.gettempdir(), f"ugf_probe_{name}.png")):
             return name
     return ""
 
@@ -420,21 +491,14 @@ def _skip_payload(reason: str, message: str = "", backend: str = "") -> dict:
 # 帧采集
 # ---------------------------------------------------------------------------
 def _take_screenshot(path: str) -> bool:
-    """截图成功返回 True。无截图工具/执行失败返回 False（不写错误文件）。"""
-    tool = _screenshot_tool()
-    if not tool:
-        return False
-    try:
-        if tool == "scrot":
-            cmd = ["scrot", "-o", path]
-        elif tool == "import":
-            cmd = ["import", "-window", "root", path]
-        else:
-            cmd = [tool, "-f", path]
-        subprocess.run(cmd, check=True, capture_output=True, timeout=5)
-        return os.path.exists(path)
-    except Exception:
-        return False
+    """截图成功返回 True。无截图工具/执行失败返回 False（不写错误文件）。
+
+    挨个候选工具真试（而不是只探存在性），并逐个试 DISPLAY。
+    """
+    for name in _SCREENSHOT_CANDIDATES:
+        if _try_screenshot(name, path):
+            return True
+    return False
 
 
 def build_perception_payload(backend_name: str = None, now=None) -> dict:
