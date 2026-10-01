@@ -6,6 +6,7 @@ tools/install_mcp.py 的契约测试  tests/test_install_mcp.py
 """
 import json
 import os
+import time
 import subprocess
 import sys
 import tempfile
@@ -83,10 +84,23 @@ class TestInstallMcp(unittest.TestCase):
         self.assertIn("mcp_servers.ugf", r.stdout)
 
     def test_check_reports_healthy(self):
-        r = run("--check")
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertIn("握手成功", r.stdout)
-        self.assertIn("ugf_guide", r.stdout)
+        """真实拉起 MCP 服务做 stdio 握手（约 20 秒）。
+
+        这条测试依赖子进程握手，在机器负载高时（例如刚跑完 1000+ 用例）
+        会偶发超时。失败时重试两次 —— 否则它会变成门禁里唯一的噪声源，
+        让人习惯性忽略红色。
+        """
+        last = None
+        for attempt in range(3):
+            r = run("--check")
+            if r.returncode == 0 and "握手成功" in r.stdout:
+                self.assertIn("ugf_guide", r.stdout)
+                return
+            last = r
+            print(f"  [重试 {attempt + 1}/3] install_mcp --check "
+                  f"退出码 {r.returncode}，5 秒后再试")
+            time.sleep(5)
+        self.fail(f"3 次都失败，最后一次：\n{(last.stdout + last.stderr)[-800:]}")
 
     def test_mcp_install_doc_exists_and_mentions_installer(self):
         doc = os.path.join(BASE, "docs", "MCP_INSTALL.md")

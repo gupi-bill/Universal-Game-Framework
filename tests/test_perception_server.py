@@ -505,3 +505,103 @@ def test_mock_frames_feed_predictor(mock_backend, monkeypatch):
     assert top["x_predict"] > top["x_now"], "匀速右移的实体预判点应在当前点右侧"
     assert math.isfinite(top["vx_per_sec"]) and top["vx_per_sec"] > 0
     predictor.reset()
+
+
+# ---------------------------------------------------------------------------
+# v2.0 真机实测（2026-10-01）：截图探测的两个修复
+# ---------------------------------------------------------------------------
+# 本机 DISPLAY=:0 无授权（Xwayland 在 :1），且 `import`（ImageMagick）
+# 存在但已损坏。这两点同时暴露了旧实现的两个假设错误。
+
+def test_screenshot_tool_is_probed_not_merely_present():
+    """D6：探测阶段必须真跑一次，不能只看 shutil.which。
+
+    旧实现按固定顺序取第一个 PATH 里有的 —— 本机 `import` 存在但
+    损坏（退出码非 0、不产文件），于是必然选中坏的那个。
+    """
+    import perception_server as ps
+
+    calls = []
+
+    def fake_which(name):
+        return "/usr/bin/" + name      # 所有候选都"存在"
+
+    def fake_try(name, path):
+        calls.append(name)
+        # 只有 gnome-screenshot 与 maim 能真正产出文件
+        return name in ("gnome-screenshot", "maim")
+
+    orig_which, orig_try = ps.shutil.which, ps._try_screenshot
+    try:
+        ps.shutil.which = fake_which
+        ps._try_screenshot = fake_try
+        got = ps._screenshot_tool()
+    finally:
+        ps.shutil.which, ps._try_screenshot = orig_which, orig_try
+
+    assert got == "gnome-screenshot", f"应跳过损坏的 import，实际选中 {got!r}"
+    assert calls[0] == "gnome-screenshot", f"首个候选就该试它，实际 {calls}"
+
+    # 关键场景：候选顺序里排在前面的**坏了**时，必须继续往后试。
+    # 旧实现只看 which 命中就返回，会直接选中坏的那个。
+    calls.clear()
+
+    def fake_try_broken_first(name, path):
+        calls.append(name)
+        return name == "maim"          # 只有最后一个能用
+
+    orig_try2 = ps._try_screenshot
+    try:
+        ps._try_screenshot = fake_try_broken_first
+        got2 = ps._screenshot_tool()
+    finally:
+        ps._try_screenshot = orig_try2
+
+    assert got2 == "maim", f"前面都坏时应一路试到最后，实际选中 {got2!r}"
+    assert calls == list(ps._SCREENSHOT_CANDIDATES), (
+        f"应挨个试完所有候选，实际只试了 {calls}")
+
+
+def test_displays_to_try_prefers_inherited_then_xwayland():
+    """D7：Wayland 会话下 XWayland 通常在 :1，不能只信继承来的 DISPLAY。"""
+    import perception_server as ps
+
+    os.environ.pop("DISPLAY", None)
+    assert ":1" in ps._displays_to_try()
+    assert ":0" in ps._displays_to_try()
+
+    os.environ["DISPLAY"] = ":7"
+    try:
+        got = ps._displays_to_try()
+        assert got[0] == ":7", "继承值应优先"
+        assert ":1" in got, "仍应兜底试 :1"
+    finally:
+        os.environ.pop("DISPLAY", None)
+
+
+def test_candidate_order_prefers_gnome_over_import():
+    """候选顺序：gnome-screenshot 必须排在 import 之前。"""
+    import perception_server as ps
+    order = list(ps._SCREENSHOT_CANDIDATES)
+    assert order.index("gnome-screenshot") < order.index("import"), (
+        f"顺序错：{order} —— 损坏的 import 不能排在可用工具前面")
+
+
+def test_take_screenshot_tries_every_candidate():
+    """_take_screenshot 必须挨个试，而不是只试选中的那一个。"""
+    import perception_server as ps
+    tried = []
+
+    def fake_try(name, path):
+        tried.append(name)
+        return name == "maim"          # 只有最后一个能用
+
+    orig = ps._try_screenshot
+    try:
+        ps._try_screenshot = fake_try
+        ok = ps._take_screenshot("/tmp/ugf_test_should_not_exist.png")
+    finally:
+        ps._try_screenshot = orig
+    assert ok is True
+    assert len(tried) == len(ps._SCREENSHOT_CANDIDATES), (
+        f"只试了 {tried}")
