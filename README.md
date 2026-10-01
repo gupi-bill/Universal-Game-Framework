@@ -270,7 +270,7 @@ python agent_cli.py -c mode     # 模式 / 感知后端 / LLM / VLM / 激活游�
 | 项 | 结论 | 复核命令 |
 |---|---|---|
 | Python 语法 | 全仓库 `compileall` 通过 | `bash scripts/check.sh --fast` |
-| 单元测试 | **1014 用例全绿** | `python -m pytest tests/ -q` |
+| 单元测试 | **1025 用例全绿** | `python -m pytest tests/ -q` |
 | 启动自检 | 本机 ERROR 0 / WARN 6，每条附「修复 + 降级」指引 | `python boot_check.py` |
 | 游戏档案 | florr / space_invaders 两份 `--strict` 全过 | `python game_profile_check.py --all --strict` |
 | MCP 工具 | 16 个工具可注册 / 可调用 / schema 正确 + 知识库往返保真 | `python tools/mcp_tools_check.py --strict` |
@@ -278,6 +278,7 @@ python agent_cli.py -c mode     # 模式 / 感知后端 / LLM / VLM / 激活游�
 | 主循环 | 离线 5 轮跑通：感知 → 预判 → 决策 → 动作 → 记忆 → 复盘 → 汇报 | `UGF_DRY_RUN=1 python agent_main.py --rounds 5` |
 | 统一启动器 | UI 探测 / 选择 / 离线开关透传全部可验 | `python launcher.py --ui auto --selftest` |
 | 运维脚本 | 启停 dry-run 零副作用；日志轮转与临时清理已沙箱实测 | `bash start_all.sh --dry-run` |
+| **P3 跨宿主** | **成立 ✅** —— 3 个宿主（workbuddy / opencode / vscode）、3 种配置 schema，各 16 工具**完全一致**，未改本项目代码 | `python tools/verify_portability.py` |
 | **P2 闭环 A/B** | **成立 ✅** —— 知识组存活率高 **10~20 个百分点**，HP 中位高 32~40，被击中少 4~5 次（三批 seed 复现，离线 arena） | `python ab_experiment.py --n 20` |
 
 ### 未验证（受本机环境限制，非代码缺陷）
@@ -297,6 +298,30 @@ python agent_cli.py -c mode     # 模式 / 感知后端 / LLM / VLM / 激活游�
 `DisplayConnectionError`），报 WARN 而非 ERROR，退出码 0。
 早期版本只捕获 `ImportError`，异常会直接冒出去让自检崩掉，
 在任何无显示器的机器上门禁恒红。
+
+### ✅ P3 实证：换宿主不改一行代码
+
+按各宿主的配置**真的把服务拉起来**、走 MCP stdio 协议握手、比对工具集：
+
+| 宿主 | 配置 schema | 工具数 |
+|------|-------------|--------|
+| workbuddy | `mcpServers` + 字符串 command + `env` | 16 |
+| opencode | `mcp` + **数组** command + `environment` + `type` | 16 |
+| vscode | `servers` + 字符串 command + `env` | 16 |
+
+**三种形状不同，工具集完全一致。**
+
+本轮为此修了两个 bug：install_mcp 只认 `opencode.json`（实际是 `.jsonc`），
+且生成的形状不对（opencode 要数组 command + `environment`）——
+也就是之前**根本装不上** opencode。
+
+复现：`python tools/install_mcp.py --list` 看各宿主现状，
+`python tools/verify_portability.py` 验一致性。
+
+⚠️ 限定：只验到 stdio 协议层。**「宿主 LLM 是否真的会用这些工具」还没验**，
+那需要真实对话，是 P3 的下一步。
+
+---
 
 ### ✅ P2 实证：知识闭环确实产生增益（限定离线环境）
 
