@@ -1,58 +1,68 @@
-# 重启后照着做
+# 切 Xorg 会话 —— 重启后照着做
 
-切换到 Xorg 会话的脚本都在这个目录（`~/xorg-switch/`）。
-`/tmp/opencode/` 里的副本已被重启清掉，以这里为准。
-
----
-
-## 1. 登录时确认进了 Xorg
-
-GDM 登录界面正常输密码即可（默认已是 Xorg）。
-**万一黑屏或异常**：点右下角齿轮，手动选 **GNOME on Xorg**。
-
-## 2. 跑验证脚本
+## 第一次该跑哪条
 
 ```bash
+sudo bash ~/xorg-switch/switch_to_xorg.sh --safe
+sudo reboot
+```
+
+**为什么第一次不要直接 reboot**：之前的切换其实没生效（脚本第一步就失败了），
+配置从没被改过。这次先跑脚本，看它打印「✓ WaylandEnable=false 已生效」再重启。
+
+## 为什么要 `--safe`
+
+本机 `/etc/gdm3/daemon.conf` 里 `AutomaticLoginEnable=True`（自动登录）。
+自动登录**不给会话选择器** —— 所以万一 Xorg 起不来，登录界面没法手动选回 Wayland。
+
+`--safe` 会临时把自动登录关掉，让你能在登录界面：
+
+- 正常情况：输密码直接进（默认已是 Xorg）
+- 想手动挑：右下角齿轮 → GNOME on Xorg
+- 想当场退出：齿轮选 GNOME on Wayland，不用重启
+
+验证没问题后恢复：
+
+```bash
+sudo bash ~/xorg-switch/switch_to_xorg.sh --restore-autologin
+sudo reboot
+```
+
+## 验证
+
+```bash
+echo $XDG_SESSION_TYPE                              # 期望 x11
 bash ~/xorg-switch/verify_xorg_capture.sh
 ```
 
-看两个关键行：
+⚠ **看脚本第 0 段的负载提示**。刚重启时机器负载很高（实测 load 8~9、
+可用内存 600MB），此时延迟数据偏大、不可与基线比。等开机 10 分钟以上、
+负载降到 1 以下再测一次。
 
-- `XDG_SESSION_TYPE = x11` → 切换成功（是 `wayland` 就是没生效）
-- `端到端/帧: 约 xxx ms` → 对比基线
-
-## 3. 基线对照
-
-| 指标 | 切换前（Wayland） | 期望（Xorg） |
+| 指标 | Wayland（当前） | Xorg（目标） |
 |---|---|---|
 | `XDG_SESSION_TYPE` | `wayland` | `x11` |
 | `import -window root` | BadMatch 失败 | ~50 ms |
 | `xwd -root` | BadMatch 失败 | 可用 |
 | `mss` | XProtoError 崩溃 | ~30 ms |
 | 截图 | 1573 ms | ~50 ms |
-| 端到端/帧 | ~2400 ms | < 800 ms |
 
-## 4. 要回滚的话
-
-任选一种：
+## 回滚
 
 ```bash
-# 方式 A：登录界面齿轮选 "GNOME on Wayland"（不用命令行，最快）
-
-# 方式 B：恢复备份
+sudo bash ~/xorg-switch/switch_to_xorg.sh --rollback   # 注释掉 WaylandEnable
+# 或
 sudo bash ~/xorg-switch/rollback_xorg.sh
-
-# 方式 C：黑屏进不去时，Ctrl+Alt+F2 切 tty，用 root 登录后
-sudo cp -a /etc/gdm3/custom.conf.bak-* /etc/gdm3/custom.conf && sudo reboot
 ```
 
-## 5. 验证通过后还没做的事
+## 其它子命令
 
-- 按实测结果调整 `perception_server._SCREENSHOT_CANDIDATES` 的优先级
-  （`import` / `mss` 比 `gnome-screenshot` 快一个量级，后者应降为兜底）
-- 这个改动还没进 UGF 主代码，等验证数据出来再动
+```bash
+sudo bash ~/xorg-switch/switch_to_xorg.sh --check   # 只看当前状态
+sudo bash ~/xorg-switch/switch_to_xorg.sh --force   # 只切 Xorg，保留自动登录（无退路）
+```
 
-## 相关文档
+## 记录在哪
 
 `~/文档/Default Project/Universal-Game-Framework/devplan/P2_REAL_YOLO_20261001.md`
-的「追加」和「追加二」两节记录了完整的诊断数据和踩坑过程。
+的「追加三」及之后各节，含完整踩坑记录。
