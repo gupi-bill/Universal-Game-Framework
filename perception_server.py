@@ -292,6 +292,11 @@ def _run_yolo(image_path: str) -> dict:
     """
     调用 YOLO 检测脚本，返回原始检测结果。
     超时返回 {"_timeout": true}，由调用方决定跳过。
+
+    注意：这是**兜底路径**。子进程每帧都要重新 `import ultralytics`
+    并 `YOLO(weight)` 加载权重（实测 ~8 秒），会直接撞上
+    yolo_timeout(8s) —— 整条 http 感知链路会**每帧超时、一个检测都产不出**。
+    正常路径请走 `_yolo_predict()`（模型常驻 + 原始像素直喂）。
     """
     detect_script = _find_detect_script()
     if not detect_script:
@@ -316,6 +321,147 @@ def _run_yolo(image_path: str) -> dict:
         return {"error": f"YOLO 输出不是 JSON: {e}", "raw": stdout[-300:]}
     except Exception as e:
         return {"error": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# 常驻 YOLO（快路径）：模型只加载一次，原始像素直喂，不落盘
+# ---------------------------------------------------------------------------
+_YOLO = {"model": None, "weight": None, "tried": False, "err": None}
+
+
+def _yolo_weight() -> str:
+    """定位权重，与 detect.py 的候选顺序保持一致。"""
+    for d in (os.path.join(BASE_DIR, "models"), os.path.join(BASE_DIR, "weights")):
+        if not os.path.isdir(d):
+            continue
+        for name in sorted(os.listdir(d)):
+            if name.endswith(".pt"):
+                return os.path.join(d, name)
+    return ""
+
+
+def _silence_cpp(fn, *a, **kw):
+    """在 fd 层压制 cv2 的 C++ 日志（NNPACK 等）。
+
+    这些是无害警告，但会刷上百行把 JSON 输出和真正的错误淹掉。
+    Python 的 warnings 开关和 OPENCV_LOG_LEVEL 都管不到 std::cerr。
+    """
+    try:
+        sys.stderr.flush()
+    except Exception:
+        pass
+    saved = os.dup(2)
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    try:
+        os.dup2(devnull, 2)
+        return fn(*a, **kw)
+    finally:
+        try:
+            sys.stderr.flush()
+        except Exception:
+            pass
+        os.dup2(saved, 2)
+        os.close(devnull)
+        os.close(saved)
+
+
+def _yolo_predict(img):
+    """用常驻模型对 numpy 图像/BGR 数组做检测，返回 detect.py 同形状的 dict。
+
+    失败返回 {"error": ...}；调用方据此回落到子进程路径。
+    """
+    if not _YOLO["tried"]:
+        _YOLO["tried"] = True
+        weight = _yolo_weight()
+        if not weight:
+            _YOLO["err"] = "找不到权重（models/ 或 weights/ 下无 .pt）"
+        else:
+            try:
+                from ultralytics import YOLO
+                _YOLO["model"] = _silence_cpp(YOLO, weight)
+                _YOLO["weight"] = weight
+            except Exception as e:
+                _YOLO["err"] = f"{type(e).__name__}: {str(e)[:120]}"
+    if _YOLO["model"] is None:
+        return {"error": _YOLO["err"] or "模型未就绪"}
+
+    try:
+        res = _silence_cpp(_YOLO["model"].predict, img, verbose=False,
+                           imgsz=320, conf=0.30)[0]
+    except Exception as e:
+        return {"error": f"推理失败 {type(e).__name__}: {str(e)[:120]}"}
+
+    boxes, names = res.boxes, res.names
+    entities, player = [], None
+    h, w = (img.shape[0], img.shape[1]) if hasattr(img, "shape") else (768, 1366)
+    for i in range(len(boxes)):
+        cl = int(boxes.cls[i].item())
+        x1, y1, x2, y2 = boxes.xyxy[i].tolist()
+        cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+        label = names.get(cl, "?")
+        raw_id, rarity = _classify_coco(label, cx / max(1, w), cy / max(1, h))
+        item = {"raw_id": raw_id, "rarity": rarity,
+                "x": round(cx, 1), "y": round(cy, 1),
+                "coco_class": label, "conf": round(float(boxes.conf[i].item()), 3),
+                "bbox": [round(v, 1) for v in (x1, y1, x2, y2)]}
+        if raw_id == "player" and player is None:
+            player = {"alive": True, "hp": 100, "max_hp": 100,
+                      "x": round(cx, 1), "y": round(cy, 1),
+                      "power_score": 90, "petal_set": "shoot", "talent": "none"}
+        else:
+            entities.append(item)
+    if player is None:
+        player = {"alive": True, "hp": 100, "max_hp": 100,
+                  "x": round(w * 0.5, 1), "y": round(h * 0.8, 1),
+                  "power_score": 80, "petal_set": "shoot",
+                  "talent": "none", "_fallback": True}
+    return {"backend": "yolo", "weight": os.path.basename(_YOLO["weight"] or ""),
+            "imgsz": 320, "detections": len(boxes), "player": player,
+            "entities": entities[:10], "teammates": [], "afk_popup": False}
+
+
+def _capture_array():
+    """mss 抓原始像素，返回 (BGR ndarray, w, h)；不可用返回 (None, 0, 0)。
+
+    mss 给的是 RGB。这里转成 BGR —— ultralytics/OpenCV 内部按 BCHW 排布，
+    通道顺序错了颜色模型会明显退化。
+    """
+    if not _mss_available():
+        return None, 0, 0
+    try:
+        import mss
+        import numpy as np
+    except Exception:
+        return None, 0, 0
+    env_backup = os.environ.get("DISPLAY")
+    for display in _displays_to_try():
+        if not display:
+            continue
+        try:
+            os.environ["DISPLAY"] = display
+            with mss.MSS() as sct:
+                shot = sct.grab(sct.monitors[1])
+                rgb = np.frombuffer(shot.rgb, dtype=np.uint8).reshape(shot.height, shot.width, 3)
+                bgr = rgb[:, :, ::-1].copy()      # RGB -> BGR，且 copy 使其连续
+                return bgr, shot.width, shot.height
+        except Exception:
+            continue
+        finally:
+            if env_backup is None:
+                os.environ.pop("DISPLAY", None)
+            else:
+                os.environ["DISPLAY"] = env_backup
+    return None, 0, 0
+
+
+def _classify_coco(label, nx, ny):
+    """COCO 类别 -> 项目实体语义。与 detect.py 保持一致（保守，不编稀有度）。"""
+    n = (label or "").lower()
+    person = {"person", "dog", "cat", "horse", "sheep", "cow", "elephant",
+              "bear", "zebra", "giraffe"}
+    if n in person:
+        return ("player" if ny > 0.6 else "enemy"), "normal"
+    return "unknown", "unknown"
 
 
 # ---------------------------------------------------------------------------
@@ -585,10 +731,25 @@ def build_perception_payload(backend_name: str = None, now=None) -> dict:
         return payload
 
     # ---- http 后端：真实截图 + YOLO ----
+    #
+    # 快路径：mss 抓原始像素 → 常驻模型直接推理 → 不落盘。
+    # 实测把每帧从 ~8200ms（子进程每帧重载权重，必然撞超时）降到 ~1200ms。
+    # 任何一环不可用都自动回落到旧的「落盘 + 子进程」路径。
+    fastpath_err = None
+    bgr, _cap_w, _cap_h = _capture_array()
+    if bgr is not None:
+        detections = _yolo_predict(bgr)
+        if not detections.get("error"):
+            payload = normalize_detections(detections)
+            payload["_backend"] = "http"
+            payload["_fastpath"] = True
+            return payload
+            # 快路径失败 → 往下走兜底
+        fastpath_err = detections["error"]
     if not _screenshot_tool():
         return _skip_payload(
             "screenshot_tool_missing",
-            "未找到截图工具(scrot/import)，无头环境请设 UGF_PERCEPTION_BACKEND=mock",
+            "未找到截图工具(mss/xwd/import/gnome-screenshot)，无头环境请设 UGF_PERCEPTION_BACKEND=mock",
             "http")
     if not _find_detect_script():
         return _skip_payload(
@@ -614,7 +775,9 @@ def build_perception_payload(backend_name: str = None, now=None) -> dict:
     if detections.get("_timeout"):
         time.sleep(skip_on_timeout())
         return _skip_payload("yolo_timeout",
-                             f"YOLO 超过 {yolo_timeout()}s 未返回", "http")
+                             f"YOLO 超过 {yolo_timeout()}s 未返回"
+                             + (f"（快路径也不可用：{fastpath_err}）" if fastpath_err else ""),
+                             "http")
     if detections.get("error"):
         return _skip_payload("yolo_error", str(detections.get("error")), "http")
 

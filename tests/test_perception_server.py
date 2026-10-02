@@ -40,11 +40,40 @@ def mock_backend(monkeypatch):
 
 
 def _patch_http(monkeypatch, tool="scrot", script="/fake/detect.py", shot=True):
+    """把 http 后端**兜底路径**的各个外部依赖替换掉。
+
+    关键：必须同时把快路径关掉（`_capture_array` 返回 None）。
+    否则本机 mss 可用时快路径会先跑通并直接返回真实检测结果，
+    根本走不到这里 mock 的兜底分支 —— 测试会拿到真实 payload 而不是
+    预期的 skip/timeout/error payload（表现为 KeyError: '_skipped'）。
+
+    快路径本身由 test_fastpath_* 单独覆盖。
+    """
+    monkeypatch.setattr(ps, "_capture_array", lambda: (None, 0, 0))
     monkeypatch.setattr(ps, "_screenshot_tool", lambda: tool)
     monkeypatch.setattr(ps, "_find_detect_script", lambda: script)
     monkeypatch.setattr(ps, "_take_screenshot", lambda p: shot)
     monkeypatch.setattr(ps, "skip_on_timeout", lambda: 0.0)
 
+
+
+def _FAKE_BGR():
+    """最小可用的 (H,W,3) uint8 数组，够走通归一化即可。"""
+    import numpy as np
+    return np.zeros((8, 8, 3), dtype=np.uint8)
+
+
+def _FAKE_DETECTIONS():
+    """一份与 detect.py 同形状的检测结果。"""
+    return {
+        "backend": "yolo", "detections": 1,
+        "player": {"alive": True, "hp": 100, "max_hp": 100,
+                   "x": 4.0, "y": 4.0, "power_score": 90,
+                   "petal_set": "shoot", "talent": "none"},
+        "entities": [{"raw_id": "hornet", "rarity": "normal",
+                      "x": 20.0, "y": 30.0, "conf": 0.9}],
+        "teammates": [], "afk_popup": False,
+    }
 
 # ---------------------------------------------------------------------------
 # 1. 后端选择
@@ -434,6 +463,7 @@ def test_route_health_fields(mock_backend):
 
 def test_route_http_backend_no_crash(monkeypatch):
     """强制 http 后端且在无截图工具的机器上，路由必须返回结构化错误而不是 500。"""
+    _patch_http(monkeypatch, tool="")   # 同时关掉快路径，否则 mss 可用时会走通
     monkeypatch.setenv(ps.BACKEND_ENV, "http")
     monkeypatch.setattr(ps, "_screenshot_tool", lambda: "")
     resp = ps.app.test_client().get("/perceive")
@@ -630,3 +660,95 @@ def test_take_screenshot_tries_every_candidate():
     assert ok is True
     assert len(tried) == len(ps._SCREENSHOT_CANDIDATES), (
         f"只试了 {tried}")
+
+
+# ---------------------------------------------------------------------------
+# 快路径：mss 抓原始像素 → 常驻模型 → 不落盘
+# ---------------------------------------------------------------------------
+# 背景：旧路径每帧起子进程跑 detect.py，而 detect.py 每次都要
+# `import ultralytics` + `YOLO(weight)` 重新加载权重（实测 ~8s），
+# 正好撞上 yolo_timeout(8s) —— 整条 http 感知链路**每帧超时、零结果**。
+# 快路径把模型常驻、原始像素直喂，实测 ~1200ms/帧。
+
+def test_fastpath_used_when_mss_available(monkeypatch):
+    """mss 有像素时，应走快路径且完全不碰落盘/子进程。"""
+    calls = {"shot": 0, "sub": 0}
+    monkeypatch.setattr(ps, "_capture_array", lambda: (_FAKE_BGR(), 1366, 768))
+    monkeypatch.setattr(ps, "_yolo_predict", lambda img: _FAKE_DETECTIONS())
+    monkeypatch.setattr(ps, "_take_screenshot", lambda p: calls.__setitem__("shot", calls["shot"] + 1))
+    monkeypatch.setattr(ps, "_run_yolo", lambda p: calls.__setitem__("sub", calls["sub"] + 1))
+
+    p = ps.build_perception_payload("http")
+    assert p["_backend"] == "http"
+    assert p.get("_fastpath") is True
+    assert p.get("_skipped") is None
+    assert calls == {"shot": 0, "sub": 0}, "快路径不应触发落盘截图或子进程"
+    assert [e["raw_id"] for e in p["entities"]] == ["hornet"]
+
+
+def test_fastpath_falls_back_when_yolo_errors(monkeypatch):
+    """快路径 YOLO 报错时，必须自动回落到「落盘 + 子进程」，不能直接失败。"""
+    order = []
+    monkeypatch.setattr(ps, "_capture_array", lambda: (_FAKE_BGR(), 1366, 768))
+    monkeypatch.setattr(ps, "_yolo_predict", lambda img: {"error": "推理失败(模拟)"})
+    monkeypatch.setattr(ps, "_screenshot_tool", lambda: "scrot")
+    monkeypatch.setattr(ps, "_find_detect_script", lambda: "/fake/detect.py")
+    monkeypatch.setattr(ps, "_take_screenshot",
+                        lambda p: (order.append("shot"), True)[1])
+    monkeypatch.setattr(ps, "_run_yolo",
+                        lambda p: (order.append("sub"), _FAKE_DETECTIONS())[1])
+
+    p = ps.build_perception_payload("http")
+    assert order == ["shot", "sub"], f"应回落到落盘+子进程，实际 {order}"
+    assert p["_backend"] == "http" and p.get("_skipped") is None
+
+
+def test_fastpath_timeout_reason_includes_fastpath_error(monkeypatch):
+    """两条路都失败时，跳过原因要带上快路径的错误，便于定位。"""
+    monkeypatch.setattr(ps, "_capture_array", lambda: (_FAKE_BGR(), 1366, 768))
+    monkeypatch.setattr(ps, "_yolo_predict", lambda img: {"error": "快路径炸了"})
+    monkeypatch.setattr(ps, "_screenshot_tool", lambda: "scrot")
+    monkeypatch.setattr(ps, "_find_detect_script", lambda: "/fake/detect.py")
+    monkeypatch.setattr(ps, "_take_screenshot", lambda p: True)
+    monkeypatch.setattr(ps, "_run_yolo", lambda p: {"_timeout": True})
+    monkeypatch.setattr(ps, "skip_on_timeout", lambda: 0.0)
+
+    p = ps.build_perception_payload("http")
+    assert p["_skipped"] is True and p["_reason"] == "yolo_timeout"
+    assert "快路径炸了" in p["_error"], f"跳过原因应含快路径错误：{p['_error']}"
+
+
+def test_capture_array_returns_none_when_mss_unavailable(monkeypatch):
+    """mss 不可用时 _capture_array 必须返回 None（触发兜底），不能抛异常。"""
+    monkeypatch.setattr(ps, "_mss_available", lambda: False)
+    assert ps._capture_array() == (None, 0, 0)
+
+
+def test_yolo_model_cached_across_calls(monkeypatch):
+    """模型必须只加载一次 —— 每帧重载正是原来超时的根因。"""
+    loads = []
+
+    class _FakeModel:
+        class _Boxes(list):
+            pass
+
+        def predict(self, img, **kw):
+            class R:
+                boxes = []
+                names = {}
+            return [R()]
+
+    def fake_yolo(weight):
+        loads.append(weight)
+        return _FakeModel()
+
+    ps._YOLO.update({"model": None, "weight": None, "tried": False, "err": None})
+    monkeypatch.setattr(ps, "_yolo_weight", lambda: "/fake/yolov8n.pt")
+    import ultralytics
+    monkeypatch.setattr(ultralytics, "YOLO", fake_yolo)
+
+    ps._yolo_predict(_FAKE_BGR())
+    ps._yolo_predict(_FAKE_BGR())
+    ps._yolo_predict(_FAKE_BGR())
+    assert len(loads) == 1, f"模型应只加载一次，实际 {len(loads)} 次"
+    ps._YOLO.update({"model": None, "weight": None, "tried": False, "err": None})
