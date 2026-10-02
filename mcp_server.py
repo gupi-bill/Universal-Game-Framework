@@ -73,6 +73,24 @@ def _perception_url() -> str:
     return f"http://127.0.0.1:{port}/perceive"
 
 
+def _perception_timeout() -> float:
+    """
+    感知 HTTP 调用超时。
+
+    原来硬编码 8 秒，但**第一帧**要加载 YOLO 权重（实测 19 秒），
+    于是必然超时、perceive_game 静默降级成 mock —— 表现为
+    「工具能用但数据是假的」，非常难发现。
+
+    所以这个值必须大于「模型冷加载耗时」。取 yolo_timeout 的 3 倍
+    作下限，够覆盖冷启动又不至于无限等。
+    """
+    try:
+        base = float(config.get("perception.yolo_timeout", 8) or 8)
+    except (TypeError, ValueError):
+        base = 8.0
+    return max(10.0, base * 3.0)
+
+
 # 向量检索开关：默认关闭，J1900 低配机器不用装向量库
 # 如需开启，设置环境变量 FLORR_VECTOR_SEARCH=1，并安装 chromadb
 USE_VECTOR_SEARCH = os.getenv("FLORR_VECTOR_SEARCH", "0") == "1"
@@ -389,7 +407,7 @@ def perceive_game() -> str:
     下一步：predict_all_entities 做位置预判，或 kb_search 查资料。
     """
     try:
-        resp = requests.get(_perception_url(), timeout=8)
+        resp = requests.get(_perception_url(), timeout=_perception_timeout())
         resp.raise_for_status()
         data = resp.json()
     except requests.ConnectionError:

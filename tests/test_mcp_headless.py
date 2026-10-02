@@ -18,25 +18,25 @@ class TestHeadlessColdStart(unittest.TestCase):
 
     def test_perceive_game_never_raises(self):
         """把感知地址指到一个必然连不上的端口，模拟服务缺失。"""
-        old = mcp_server.PERCEPTION_URL
-        mcp_server.PERCEPTION_URL = "http://127.0.0.1:59999/perceive"
+        old = mcp_server._perception_url
+        mcp_server._perception_url = lambda: "http://127.0.0.1:59999/perceive"
         try:
             out = mcp_server.perceive_game()
         finally:
-            mcp_server.PERCEPTION_URL = old
+            mcp_server._perception_url = old
         self.assertIsInstance(out, str)
         self.assertIn("_fallback", out, "感知缺失时应带 _fallback 标记")
 
     def test_perceive_then_predict_chain_runs(self):
         mcp_server.reset_predictor()
-        old = mcp_server.PERCEPTION_URL
-        mcp_server.PERCEPTION_URL = "http://127.0.0.1:59999/perceive"
+        old = mcp_server._perception_url
+        mcp_server._perception_url = lambda: "http://127.0.0.1:59999/perceive"
         try:
             for _ in range(4):
                 mcp_server.perceive_game()
             out = mcp_server.predict_all_entities()
         finally:
-            mcp_server.PERCEPTION_URL = old
+            mcp_server._perception_url = old
         # 要么给出预判结果，要么明确说数据不足——都不能是异常或 traceback
         self.assertIsInstance(out, str)
         self.assertNotIn("Traceback", out)
@@ -45,8 +45,8 @@ class TestHeadlessColdStart(unittest.TestCase):
 
     def test_all_tools_callable_without_perception(self):
         """16 个工具在没有感知服务时都得能调用（不要求结果正确，要求不炸）。"""
-        old = mcp_server.PERCEPTION_URL
-        mcp_server.PERCEPTION_URL = "http://127.0.0.1:59999/perceive"
+        old = mcp_server._perception_url
+        mcp_server._perception_url = lambda: "http://127.0.0.1:59999/perceive"
         calls = {
             "kb_list": lambda: mcp_server.kb_list(),
             "kb_search": lambda: mcp_server.kb_search(keyword="test"),
@@ -69,7 +69,7 @@ class TestHeadlessColdStart(unittest.TestCase):
                     self.fail(f"{name} 抛异常: {type(e).__name__}: {e}")
                 self.assertNotIn("Traceback", str(out), f"{name} 返回了 traceback")
         finally:
-            mcp_server.PERCEPTION_URL = old
+            mcp_server._perception_url = old
 
 
 if __name__ == "__main__":

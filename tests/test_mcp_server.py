@@ -538,3 +538,45 @@ class TestToolErrorHandling:
         (kb / "a.md").write_text("alpha", encoding="utf-8")
         (kb / "b.md").write_text("alpha", encoding="utf-8")
         assert "共找到 2 条结果" in M._text_search("alpha", str(kb))
+
+
+# ---------------------------------------------------------------------------
+# 感知 HTTP 超时：必须大于 YOLO 模型冷加载时间
+# ---------------------------------------------------------------------------
+# 背景：perceive_game 原硬编码 timeout=8，而第一帧要加载 YOLO 权重
+# （实测 19 秒），必然超时 → 静默降级成 mock。表现为「工具能调但数据是假的」，
+# 极难发现。这里锁住「超时下限」这个约定。
+
+def test_perception_timeout_exceeds_model_cold_start(monkeypatch):
+    """感知超时必须大于 yolo_timeout，否则第一帧必然超时降级。"""
+    import mcp_server as m
+    real_get = m.config.get
+    for yolo_to in (8, 20):
+        monkeypatch.setattr(m.config, "get",
+                            lambda k, d=None, _r=real_get, _v=yolo_to:
+                            _v if k == "perception.yolo_timeout" else _r(k, d))
+        t = m._perception_timeout()
+        assert t > yolo_to, f"超时({t}s) 必须大于 yolo_timeout({yolo_to}s)"
+        assert t >= 10.0, f"超时({t}s) 应有绝对下限，防止 yolo_timeout 被配得很小"
+
+
+def test_perception_timeout_survives_bad_config(monkeypatch):
+    """配置里是脏值时不能抛异常，应回落到安全下限。"""
+    import mcp_server as m
+    real_get = m.config.get
+    for bad in ("abc", None, 0, "", -5):
+        monkeypatch.setattr(m.config, "get",
+                            lambda k, d=None, _r=real_get, _v=bad:
+                            _v if k == "perception.yolo_timeout" else _r(k, d))
+        t = m._perception_timeout()
+        assert isinstance(t, float) and t >= 10.0, f"脏值 {bad!r} 得到 {t!r}"
+
+
+def test_perceive_uses_configured_timeout(monkeypatch):
+    """perceive_game 必须用 _perception_timeout()，不能再写死 8。"""
+    import inspect
+    import mcp_server as m
+    src = inspect.getsource(m.perceive_game)
+    assert "timeout=_perception_timeout()" in src, (
+        "perceive_game 仍在用硬编码超时 —— 改了配置也不生效")
+    assert "timeout=8" not in src
