@@ -528,7 +528,7 @@ def test_screenshot_tool_is_probed_not_merely_present():
 
     def fake_try(name, path):
         calls.append(name)
-        # 只有 gnome-screenshot 与 maim 能真正产出文件
+        # 只有 gnome-screenshot 与 maim 能真正产出文件（mss/xwd/import 全坏）
         return name in ("gnome-screenshot", "maim")
 
     orig_which, orig_try = ps.shutil.which, ps._try_screenshot
@@ -539,8 +539,11 @@ def test_screenshot_tool_is_probed_not_merely_present():
     finally:
         ps.shutil.which, ps._try_screenshot = orig_which, orig_try
 
-    assert got == "gnome-screenshot", f"应跳过损坏的 import，实际选中 {got!r}"
-    assert calls[0] == "gnome-screenshot", f"首个候选就该试它，实际 {calls}"
+    assert got == "gnome-screenshot", f"应跳过损坏的工具，实际选中 {got!r}"
+    # 必须从头挨个试（不能只试某一个），且**不能**只靠 which 就返回
+    assert calls[0] == ps._SCREENSHOT_CANDIDATES[0], (
+        f"应从第一个候选开始试，实际 {calls}")
+    assert len(calls) > 1, f"前面的坏了就该继续往后试，实际只试了 {calls}"
 
     # 关键场景：候选顺序里排在前面的**坏了**时，必须继续往后试。
     # 旧实现只看 which 命中就返回，会直接选中坏的那个。
@@ -579,12 +582,34 @@ def test_displays_to_try_prefers_inherited_then_xwayland():
         os.environ.pop("DISPLAY", None)
 
 
-def test_candidate_order_prefers_gnome_over_import():
-    """候选顺序：gnome-screenshot 必须排在 import 之前。"""
+def test_candidate_order_is_speed_ranked_not_session_hardcoded():
+    """候选顺序必须按**实测延迟**排，而不是沿用任何单一会话下的结论。
+
+    背景：这个顺序被推翻过两次，每次都是因为换了会话类型：
+      · Wayland + Xwayland -rootless：import/xwd/mss 全部失效
+        （BadMatch / XProtoError），gnome-screenshot 是唯一能用的 → 它排第一
+      · Xorg：全部可用，实测 mss 32ms / xwd 201ms / import 1443ms
+        / gnome-screenshot 2303ms → mss 排第一
+
+    所以这里**不能**断言任何具体的相对顺序（那等于把某次机器状态
+    焊死在测试里）。真正要守住的是：
+      1. 列表里包含各会话下唯一可用的兜底工具；
+      2. 最快的工具排在最前（本机 Xorg 实测 mss）；
+      3. 探测阶段会挨个真试，坏的自然被跳过（由上面两个测试保证）。
+    """
     import perception_server as ps
     order = list(ps._SCREENSHOT_CANDIDATES)
-    assert order.index("gnome-screenshot") < order.index("import"), (
-        f"顺序错：{order} —— 损坏的 import 不能排在可用工具前面")
+
+    for tool in ("mss", "gnome-screenshot", "import"):
+        assert tool in order, f"候选列表缺 {tool}：{order}"
+
+    # Xorg 实测最快的必须排第一（mss 32ms vs gnome-screenshot 2303ms）
+    assert order[0] == "mss", (
+        f"最快的工具应排第一，当前 {order}。"
+        f"若换了会话类型请重新实测并更新本断言及 perception_server 里的注释")
+
+    # 兜底工具必须在列表里 —— Wayland 下只有 gnome-screenshot 能用
+    assert "gnome-screenshot" in order, f"缺少 Wayland 兜底工具：{order}"
 
 
 def test_take_screenshot_tries_every_candidate():

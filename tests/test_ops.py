@@ -117,12 +117,32 @@ def test_headless_report_empty_when_all_present(monkeypatch, tmp_path):
     assert boot_check._headless_report() == [], "条件齐备时不应再报降级"
 
 
-def test_strict_promotes_warn_to_error():
-    """--strict（CI/容器门禁）下 WARN 也必须阻断。"""
-    r = _run([PY, "boot_check.py", "--strict"])
-    assert r.returncode == 1, "strict 模式下存在 WARN 应退出 1"
-    r2 = _run([PY, "boot_check.py"])
-    assert r2.returncode == 0, "默认模式 WARN 不阻断"
+def test_strict_promotes_warn_to_error(monkeypatch):
+    """--strict（CI/容器门禁）下 WARN 也必须阻断。
+
+    注意：不能靠"跑一次子进程看退出码"来验证 —— 那样等于假设
+    「本机一定有 WARN」。本机环境修好后（Xorg 会话 + 装了 YOLO 权重）
+    WARN 数会变成 0，strict 自然返回 0，测试反而挂了。
+    这里直接给 _check() 塞一个 WARN，验证 strict 的判定逻辑本身。
+    """
+    real_check = boot_check._check
+
+    def fake_check():
+        issues = real_check()
+        issues.append({"level": "WARN", "msg": "强制注入的 WARN",
+                       "fix": "无", "degrade": "降级到 mock"})
+        return issues
+
+    monkeypatch.setattr(boot_check, "_check", fake_check)
+
+    # --json 走机器可读分支，不打印人读格式
+    assert boot_check.run(strict=True, as_json=True) is False, \
+        "strict 模式下存在 WARN 应判为不可启动"
+    assert boot_check.run(strict=False, as_json=True) is True, \
+        "默认模式 WARN 不应阻断"
+    # 退出码映射：不可启动 -> 1
+    assert boot_check.main(["--strict", "--json"]) == 1
+    assert boot_check.main(["--json"]) == 0
 
 
 def test_json_output_schema():

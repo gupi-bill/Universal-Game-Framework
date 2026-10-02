@@ -130,11 +130,78 @@ def configured_backend() -> str:
 #:
 #: 现在的做法：**挨个真试一遍**，用第一个能产出文件的。
 #: 探测阶段不再靠 shutil.which 猜。
-_SCREENSHOT_CANDIDATES = ("gnome-screenshot", "scrot", "import", "maim")
+#:
+#: 顺序按**本机实测延迟**排（Xorg 会话，2026-10-02，负载<1）：
+#:
+#:   mss              32 ms   纯库，无子进程
+#:   xwd             201 ms   原始格式，需再转码
+#:   import         1443 ms
+#:   gnome-screenshot 2303 ms  GNOME 桌面集成，最慢
+#:
+#: 原顺序是 gnome-screenshot 打头 —— 那是在 Wayland 下测的，
+#: 当时它是**唯一**能用的（import/xwd/mss 在 rootless Xwayland 上
+#: 全部 BadMatch / XProtoError）。换到 Xorg 后它变成了最慢的，
+#: 顺序必须跟着换，否则每帧都在用最贵的那个。
+_MSS_AVAILABLE = None
+
+
+def _mss_available() -> bool:
+    """mss 能否 import（只探一次，结果缓存）。"""
+    global _MSS_AVAILABLE
+    if _MSS_AVAILABLE is None:
+        try:
+            import mss  # noqa: F401
+            _MSS_AVAILABLE = True
+        except Exception:
+            _MSS_AVAILABLE = False
+    return _MSS_AVAILABLE
+
+
+def _screenshot_with_mss(path: str) -> bool:
+    """用 mss 库截图，绕开子进程。
+
+    需要 Xorg/X11 会话：在 GNOME on Wayland + Xwayland -rootless 下，
+    mss 会在枚举显示器时抛 XProtoError（实测），所以这里把异常
+    一律吞掉返回 False，交给后面的候选工具。
+    """
+    if not _mss_available():
+        return False
+    try:
+        import mss
+        import mss.tools
+    except Exception:
+        return False
+    for display in _displays_to_try():
+        if not display:
+            continue
+        env_backup = os.environ.get("DISPLAY")
+        try:
+            os.environ["DISPLAY"] = display
+            with mss.MSS() as sct:
+                shot = sct.grab(sct.monitors[1])
+                if os.path.exists(path):
+                    os.remove(path)
+                mss.tools.to_png(shot.rgb, shot.size, output=path)
+            if os.path.exists(path) and os.path.getsize(path) > 0:
+                return True
+        except Exception:
+            continue
+        finally:
+            if env_backup is None:
+                os.environ.pop("DISPLAY", None)
+            else:
+                os.environ["DISPLAY"] = env_backup
+    return False
+
+
+#: 按实测延迟排序：mss → xwd → import → gnome-screenshot
+_SCREENSHOT_CANDIDATES = ("mss", "xwd", "import", "gnome-screenshot", "scrot", "maim")
 
 
 def _screenshot_cmd(tool: str, path: str) -> list:
     """按工具名拼出命令行。"""
+    if tool == "xwd":
+        return [tool, "-root", "-out", path]
     if tool == "gnome-screenshot":
         return [tool, "-f", path]
     if tool == "scrot":
@@ -163,6 +230,8 @@ def _displays_to_try() -> list:
 
 def _try_screenshot(tool: str, path: str) -> bool:
     """用指定工具 + 指定 DISPLAY 截一次图，产出文件才算成功。"""
+    if tool == "mss":
+        return _screenshot_with_mss(path)
     if not shutil.which(tool):
         return False
     env = dict(os.environ)
