@@ -110,3 +110,7 @@ models/
 
 datasets/
 yolov8n.pt
+
+auto_train.py 不用
+training_runs/
+training_logs/
