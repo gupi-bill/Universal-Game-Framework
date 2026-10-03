@@ -107,3 +107,6 @@ florr_powerful_tools/
 
 # YOLO 权重（6MB 二进制，体积大不入库；用下方命令获取）
 models/
+
+datasets/
+yolov8n.pt

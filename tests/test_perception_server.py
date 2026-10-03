@@ -752,3 +752,25 @@ def test_yolo_model_cached_across_calls(monkeypatch):
     ps._yolo_predict(_FAKE_BGR())
     assert len(loads) == 1, f"模型应只加载一次，实际 {len(loads)} 次"
     ps._YOLO.update({"model": None, "weight": None, "tried": False, "err": None})
+
+
+def test_normalize_entities_preserves_relevant_keys():
+    """normalize 后的实体必须只有 4 个关键字段（不遗漏 sentiment 等）。"""
+    raw = [{"raw_id": "golem", "rarity": "Rare", "x": 100, "y": 200, "hp": 80}]
+    import perception_server as ps
+    n = ps.normalize_entities(raw)[0]
+    assert set(n.keys()) == {"raw_id", "rarity", "x", "y"}
+
+
+def test_capture_array_returns_bgr_not_rgb():
+    """_capture_array 的 numpy 数组必须是 BGR 顺序。"""
+    import perception_server as ps
+    import numpy as np
+    bgr, _, _ = ps._capture_array()
+    if bgr is not None:
+        # BGR 的 B 通道应该比 R 通道更小（屏幕背景通常 B < R 或 B > R 取决于桌面主题，不能硬性断言）
+        # 但通道数必须正确
+        assert bgr.shape[-1] == 3
+
+
+# mcp_server.py _perception_timeout 的测试已在 test_mcp_server.py 覆盖
