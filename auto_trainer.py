@@ -87,7 +87,7 @@ def search_game(game_name: str) -> dict:
         try:
             import requests
             search_url = f"https://www.baidu.com/s?wd={urllib.parse.quote(game_name + ' 攻略')}"
-            r = requests.get(search_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+            r = requests.get(search_url, headers=headers, timeout=10)
             if r.status_code == 200:
                 from bs4 import BeautifulSoup
                 soup = BeautifulSoup(r.text, "html.parser")
@@ -99,18 +99,47 @@ def search_game(game_name: str) -> dict:
         except Exception as e:
             pass
 
-    # 3. 搜索实体关键词的替代方案：直接查 GitHub 上是否有人做过
+    # 3. GitHub 搜索相关仓库 + Mod/Wiki
     try:
         import requests
-        gh_url = f"https://api.github.com/search/repositories?q={urllib.parse.quote(game_name + ' mobs dataset')}&per_page=5"
-        r = requests.get(gh_url, headers={"User-Agent": "UGF/1.0"}, timeout=10)
-        if r.status_code == 200:
-            data = r.json()
-            for repo in data.get("items", [])[:3]:
-                result["references"].append(repo["html_url"])
-                print(f"[搜索] 发现相关仓库: {repo['full_name']}")
+        queries = [
+            game_name + ' mobs dataset',
+            game_name + ' minecraft mod',
+            game_name + ' wiki',
+            game_name + ' github',
+        ]
+        for q in queries:
+            gh_url = f"https://api.github.com/search/repositories?q={urllib.parse.quote(q)}&per_page=3"
+            r = requests.get(gh_url, headers=headers, timeout=10)
+            if r.status_code == 200:
+                for repo in r.json().get("items", [])[:3]:
+                    ref = repo["html_url"]
+                    if ref not in result["references"]:
+                        result["references"].append(ref)
+                        print(f"[搜索] 发现相关仓库: {repo['full_name']}")
     except Exception as e:
         pass
+
+    # 4. 兜底：Fandom wiki 搜索（主要游戏百科站）
+    if not result["summary"] or result["status"] in ("", "no_wikipedia", "not_found"):
+        try:
+            import requests
+            fandom_url = f"https://www.google.com/search?q={urllib.parse.quote(game_name + ' fandom wiki')}"
+            r = requests.get(fandom_url, headers=headers, timeout=10)
+            if r.status_code == 200:
+                from bs4 import BeautifulSoup
+                soup = BeautifulSoup(r.text, "html.parser")
+                # 找 fandom 域名的链接
+                for a in soup.find_all("a", href=True):
+                    href = a["href"]
+                    if "fandom.com" in href and game_name.lower() in href.lower():
+                        result["references"].append(href)
+                        if not result["summary"]:
+                            result["summary"] = f"Fandom wiki: {href}"
+                            result["status"] = "found_fandom"
+                        break
+        except Exception:
+            pass
 
     if not result["status"]:
         result["status"] = "not_found"
