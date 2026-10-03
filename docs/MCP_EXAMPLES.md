@@ -83,3 +83,30 @@
 | `{"status":"insufficient_data"}` | 历史帧 < 3 | 多调几次 `perceive_game` |
 | `错误: 非法的知识库路径` | 文件名/游戏名含 `..` 或路径穿越 | 去掉路径分隔符与 `..` |
 | 结果里带 `_fallback` | 感知服务没起，用了合成帧 | 正常现象；上真机前再起感知服务 |
+
+---
+
+## 附录：环境差异（dry-run vs 真机）
+
+| 环境变量 | 效果 |
+|---|---|
+| `UGF_DRY_RUN=1` | 所有动作只打日志，不动键鼠；感知走 mock/合成帧，不依赖感知服务 |
+| `UGF_PERCEPTION_BACKEND=mock` | 强制用合成感知，完全离线 |
+| `UGF_PERCEPTION_BACKEND=http` | 走真实截图+YOLO；感知服务必须独立启动 |
+| `UGF_YOLO_WEIGHT` | 指定 YOLO 权重文件路径 |
+
+### 模型缓存
+
+第一次调用 `perceive_game` 时，YOLO 模型会被加载到内存（约 19 秒）。
+之后的调用复用同一模型，每模型只加载一次。
+
+### 超时链
+
+```
+client timeout (24s)          |  perception_server
+  |                           |    yolo_timeout (8s)
+  +--- HTTP request --------> +--- 子进程 detect.py
+                                      |-- 常驻模型 predict (~700ms)
+```
+
+模型未加载完时第一帧会慢，客户端无需适配，超时等待即可。
