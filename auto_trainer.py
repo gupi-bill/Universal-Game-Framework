@@ -80,7 +80,7 @@ def search_game(game_name: str) -> dict:
         else:
             result["status"] = "no_wikipedia"
     except Exception as e:
-        result["status"] = f"error: {e}"
+        result["_wikipedia_error"] = str(e)[:100]
 
     # 2. 百度搜索（简单爬取标题和摘要）
     if not result["summary"]:
@@ -142,7 +142,12 @@ def search_game(game_name: str) -> dict:
             pass
 
     if not result["status"]:
-        result["status"] = "not_found"
+        if result["references"]:
+            result["status"] = "found_via_github"
+        elif result.get("_wikipedia_error"):
+            result["status"] = "wikipedia_timeout"
+        else:
+            result["status"] = "not_found"
         print(f"[搜索] 未找到 {game_name} 的相关资料")
     else:
         print(f"[搜索] 完成: {result['status']}, 摘要 {len(result['summary'])} 字, 参考 {len(result['references'])} 个")
