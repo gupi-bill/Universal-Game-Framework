@@ -10,7 +10,7 @@
 融合 **YOLO 视觉识别** + **MCP 标准协议**，从 Florr.io 出发，目标是通用到所有游戏：
 **detect 问游戏 → research 查资料 → ensure 确认能力 → play 开玩 → report 汇报**
 
-> 🚀 **三分钟装上别的 Agent**：见 [docs/MCP_INSTALL.md](./docs/MCP_INSTALL.md) ｜
+> 🚀 **三分钟装上别的 Agent**：见 [docs/MCP_INSTALL.md](./docs/MCP_INSTALL.md) ｜ [docs/TOOLS.md](./docs/TOOLS.md) ｜ [docs/XORG_SWITCH.md](./docs/XORG_SWITCH.md) ｜ [docs/MCP_EXAMPLES.md](./docs/MCP_EXAMPLES.md) ｜ 
 > 一条命令：`python tools/install_mcp.py --target workbuddy`
 
 [![Python](https://img.shields.io/badge/Python-3.8%2B-blue?logo=python&logoColor=white)](https://www.python.org)
