@@ -466,3 +466,21 @@ Universal-Game-Framework/
 **路线：从 Florr.io 专用，走向通用游戏 Agent** — 持续进化中 🚀
 
 </div>
+
+## 工具链
+
+- **截图**：X11 `mss` 原生 grab，60+ms
+- **检测**：Ultralytics YOLO + 自定义训练
+- **感知服务**：Flask HTTP / 本地合成 mock / 无头回退
+- **决策**：PERCEPTION-PREDICT-JUDGE-ACT-LOOP
+- **交互**：X11 动作注入 + 拟人化偏移
+
+## 已知限制
+
+1. 本机 CPU 不支持 AVX，无法本地训练 YOLO
+2. COCO 权重识别游戏实体精度受限
+3. 长时间不操作会触发 AFK 验证
+
+## 许可
+
+MIT License
