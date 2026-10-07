@@ -283,7 +283,10 @@ def test_parts_build_matches_agent():
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     r = subprocess.run(
         [sys.executable, os.path.join(root, "build.py"), "check-agent"],
-        capture_output=True, text=True, timeout=60, cwd=root,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        cwd=root,
     )
     assert r.returncode == 0, r.stdout + r.stderr
     assert "逐字节一致" in r.stdout
@@ -296,11 +299,21 @@ def test_split_roundtrip_identity(tmp_path):
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     with open(os.path.join(root, "agent.py"), encoding="utf-8") as f:
         before = f.read()
-    r1 = subprocess.run([sys.executable, os.path.join(root, "build.py"), "split"],
-                        capture_output=True, text=True, timeout=60, cwd=root)
+    r1 = subprocess.run(
+        [sys.executable, os.path.join(root, "build.py"), "split"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        cwd=root,
+    )
     assert r1.returncode == 0, r1.stdout
-    r2 = subprocess.run([sys.executable, os.path.join(root, "build.py"), "agent"],
-                        capture_output=True, text=True, timeout=60, cwd=root)
+    r2 = subprocess.run(
+        [sys.executable, os.path.join(root, "build.py"), "agent"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        cwd=root,
+    )
     assert r2.returncode == 0, r2.stdout
     with open(os.path.join(root, "agent.py"), encoding="utf-8") as f:
         after = f.read()

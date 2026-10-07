@@ -16,6 +16,7 @@
 产物 dist/ugf.pyz 只含 agent.py + 入口壳，零第三方依赖即可跑通离线链路；
 运行期数据（知识库/日志/状态）自动落 UGF_HOME（默认 ~/.ugf），见 ROADMAP #21。
 """
+
 import os
 import re
 import shutil
