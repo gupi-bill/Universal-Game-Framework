@@ -2,485 +2,163 @@
 
 # 🎮 Universal-Game-Framework
 
-**不是 Agent —— 是装到别的 Agent 身上的「游戏能力包」（MCP 服务）**
+**一个能自己跑的单文件游戏 Agent**
 
-把它注册进任意支持 MCP 的客户端（Kilo / Codex / OpenCode / WorkBuddy / Claude Desktop），
-那个 Agent 就立刻拥有 **看画面 → 预判 → 评估 → 出动作 → 查/写知识库 → 复盘** 一整套游戏能力。
+看画面 → 预判 → 评估 → 出动作 → 查/写经验 → 复盘 → 汇报 → 学习，全在一个 `agent.py` 里。
 
-融合 **YOLO 视觉识别** + **MCP 标准协议**，从 Florr.io 出发，目标是通用到所有游戏：
-**detect 问游戏 → research 查资料 → ensure 确认能力 → play 开玩 → report 汇报**
-
-> 🚀 **三分钟装上别的 Agent**：见 [docs/MCP_INSTALL.md](./docs/MCP_INSTALL.md) ｜ [docs/TOOLS.md](./docs/TOOLS.md) ｜ [docs/XORG_SWITCH.md](./docs/XORG_SWITCH.md) ｜ [docs/MCP_EXAMPLES.md](./docs/MCP_EXAMPLES.md) ｜ 
-> 一条命令：`python tools/install_mcp.py --target workbuddy`
-
-[![Python](https://img.shields.io/badge/Python-3.8%2B-blue?logo=python&logoColor=white)](https://www.python.org)
-[![MCP](https://img.shields.io/badge/Model%20Context%20Protocol-标准%20Agent-green)](https://modelcontextprotocol.io)
-[![Version](https://img.shields.io/badge/Version-v2.0%20起步-orange)](#)
-[![License](https://img.shields.io/badge/License-MIT-lightgrey)](./LICENSE)
-
-> ⚠️ **声明：仅用于本地 AI 智能体技术研究。在 florr.io 官方服务器运行 bot 违反游戏服务条款，可能导致账号封禁。**
+> ⚠️ **声明**：仅用于本地 AI 智能体技术研究。在 florr.io 官方服务器运行 bot 违反游戏服务条款，可能导致账号封禁。请在本地 / 自建 / 已授权环境使用。
 
 </div>
 
 ---
 
-## 目录
+## 这是什么（给零基础看的）
 
-- [🚀 装到你的 Agent 上（MCP）](#-装到你的-agent-上mcp)
-- [✨ 核心能力](#-核心能力)
-- [🔬 稀有度体系](#-稀有度体系)
-- [🏗️ 当前架构](#️-当前架构)
-- [⚙️ 快速开始（调试用 CLI / 大盘）](#️-快速开始)
-- [📦 安装包](#-安装包)
-- [🧩 MCP 工具](#-mcp-工具16-个)
-- [🧪 离线模式与自测](#-离线模式与自测)
-- [✅ 验证状态](#-验证状态)
-- [📁 文件结构](#-文件结构)
-- [❓ 常见问题 FAQ](./docs/FAQ.md)
-- [🗺️ 路线图](#️-路线图roadmap)
+想象一个"游戏代打机器人"，它每一步都做这几件事：
+
+1. **看**：拿到当前画面里有什么（自己血量、怪物、队友）。
+2. **算**：怪物下一秒会走到哪、打得过还是打不过。
+3. **查**：翻自己的"经验本"（知识库），看以前遇到这种情况该怎么办。
+4. **动**：按经验做出移动 / 攻击 / 切套装的动作。
+5. **记**：打完一局写复盘，把有用的经验继续写进本子。
+
+这个"机器人"就是 [agent.py](file:///workspace/Universal-Game-Framework/agent.py) ——
+**一个文件、一条命令就能开跑**，不需要装 MCP 服务、不需要别的 Agent 托管。
 
 ---
 
-## 🚀 装到你的 Agent 上（MCP）
-
-**三分钟，让任何一个支持 MCP 的 Agent 获得游戏能力。**
-
-### 方式 A：装包（推荐）
+## 快速开始
 
 ```bash
-pip install universal-game-framework
+# 1. 先离线试跑（不碰键鼠、不需要密钥，最安全）
+python agent.py selftest            # 全链路自检，应输出 19/19 通过
+python agent.py run --dry-run --rounds 20
 
-ugf-install --list                 # 看能装到哪些客户端
-ugf-install --target workbuddy     # 装进 WorkBuddy
-ugf-mcp                            # 起服务（stdio）
-ugf-check                          # 装不上时先体检
+# 2. 看运行模式和手册
+python agent.py mode
+python agent.py guide
+
+# 3. 真机开跑（需要外部感知服务 + 装了 pyautogui）
+pip install "pyautogui>=0.9.54"     # 有显示器 / X server 才需要
+python agent.py run
 ```
 
-### 方式 B：从源码
+依赖极简：离线链路**零第三方库**即可跑通；真实运行建议 `pip install -r requirements.txt`（只有 `pyyaml` + `requests`）。
+
+---
+
+## 全部命令
+
+| 命令 | 作用 |
+| --- | --- |
+| `run` | 主循环（`--rounds N` 限制回合 / `--interval S` 间隔 / `--dry-run` 空跑） |
+| `mode` | 查看运行模式（dry-run？感知后端？LLM 开没开？当前游戏？） |
+| `selftest` | 离线自检：跑通全链路并断言关键产物 |
+| `perceive` | 手工取一帧画面状态 |
+| `predict` | 手工取一帧 + 全实体 1.2s 预判 |
+| `action` | 执行动作：`action move --x 100 --y 200` / `action attack` |
+| `set` | 切换套装：`set retreat` |
+| `afk` | AFK 弹窗处理指引 |
+| `kb` | 知识库：`list` / `search` / `write` / `append` / `export` / `import` / `boss` / `tactic` / `clean` / `maintain` |
+| `learn` | 视频学习：`learn video.mp4` 或 `learn --url <链接> --frames 5` |
+| `report` | 生成对局报告（写 `run_logs/`，可配 Webhook 推送） |
+| `session` | 看会话记忆与历史战绩 |
+| `tune` | 自动调参：`tune --status` / `tune --reset` |
+| `guide` | 打印使用手册 |
+
+---
+
+## 能力清单（一个不少）
+
+| 能力 | 在哪体现 |
+| --- | --- |
+| 感知 | `Perception`：支持 `mock`（离线合成）/ `http`（接外部检测服务）双后端 |
+| 全实体预判 | `Predictor`：按历史轨迹预测未来位置，带置信度与 `prediction_trusted` |
+| 战斗评估 | `judge_combat`：按威胁比 / 血量 / 怪物档次给出 `fight / cautious_fight / retreat` |
+| 动态心态 | `decide_mindset`：激进 / 平衡 / 保守，随场面变化 |
+| 知识闭环 | `extract_tactics` + `apply_tactics`：战术带**适用条件**，命中才影响决策 |
+| 拟人动作 | 移动抖动、随机停顿、安全区钳制、鼠标四角安全暂停 |
+| BOSS 记忆 | 归纳移动模式 / 追踪距离，写回知识库 |
+| 组队协同 | 识别队友、分工、保持距离 |
+| 死亡复盘 | 只有 BOSS / 组队局才生成复盘，避免噪声 |
+| 会话记忆 | 断点续玩、历史战绩 |
+| 自动调参 | 按战斗统计自动微调阈值（阈值批次写入 `tuned_overrides.yaml`） |
+| 自动汇报 | 生成 Markdown 报告，可选 Webhook 推送 |
+| 视频学习 | 逐帧 VLM 提战术，去重后写入知识库 |
+
+---
+
+## 配置
+
+改参数不用改源码，全部集中在这三处（**优先级从低到高**）：
+
+1. `agent.py` 里的内置 `DEFAULT`（最后兜底）
+2. [config.yaml](file:///workspace/Universal-Game-Framework/config.yaml)（全局配置）
+3. `game_profiles/<游戏名>.yaml`（游戏档案，见 [game_profiles/](file:///workspace/Universal-Game-Framework/game_profiles)）
+
+改完保存即**热加载**生效，不用重启。
+
+### 常用环境变量
+
+复制 [.env.example](file:///workspace/Universal-Game-Framework/.env.example) 为 `.env` 再填：
+
+| 变量 | 作用 |
+| --- | --- |
+| `UGF_DRY_RUN=1` | 只记录动作，不碰真实键鼠（推荐先这样试） |
+| `UGF_PERCEPTION_BACKEND` | `mock`（离线合成）/ `http`（接外部检测服务）/ `auto` |
+| `UGF_PERCEPTION_URL` | 外部感知服务地址（留空则用 `127.0.0.1:<端口>/perceive`） |
+| `AGENT_GAME` | 切换游戏档案，如 `space_invaders` |
+| `LLM_API_URL` / `LLM_API_KEY` / `LLM_MODEL` | LLM 决策 |
+| `VLM_API_URL` / `VLM_API_KEY` / `VLM_MODEL` | 视频学习的视觉模型 |
+| `UGF_WEBHOOK_URL` | 报告推送地址 |
+
+---
+
+## 为什么这么轻
+
+| 对比项 | 旧版（MCP 服务） | 现在（单文件 Agent） |
+| --- | --- | --- |
+| 文件数 | 100+ 个模块 / 文档 / 工具 | `agent.py` 一个文件 |
+| 每回合开销 | MCP 子进程 + JSON-RPC 往返 6 次 | 进程内函数调用，**零 IPC** |
+| 依赖 | flask / mcp / numpy / psutil / dotenv… | 核心只需 `pyyaml` + `requests`（缺失自动降级） |
+| 离线可跑 | 需要装一堆包 | 只用标准库即可跑通 dry-run 全链路 |
+
+细节设计：`requests` / `yaml` / `pyautogui` / `cv2` 全部**惰性 import**；
+预判与战斗评估是**纯 math**，不引入 numpy。
+
+---
+
+## 测试
 
 ```bash
-cd Universal-Game-Framework
-python3 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
-
-python tools/install_mcp.py --list                 # 看能装到哪些客户端
-python tools/install_mcp.py --target workbuddy     # WorkBuddy
-python tools/install_mcp.py --target opencode      # OpenCode
-python tools/install_mcp.py --target custom --path /绝对路径/mcp.json
+pip install pytest
+python -m pytest tests/ -q      # 单元测试
+python agent.py selftest        # 端到端离线自检
 ```
 
-装完在客户端的「连接器 / MCP 设置」里把 `ugf` 设为信任，重启即可调用。
-完整接入说明见 [docs/MCP_INSTALL.md](./docs/MCP_INSTALL.md)，可照抄的调用链见 [docs/MCP_EXAMPLES.md](./docs/MCP_EXAMPLES.md)。
-
-| 传输 | 用法 | 场景 |
-|---|---|---|
-| stdio（默认） | `python mcp_server.py` | 单个客户端，最省事 |
-| streamable-http | `python mcp_server.py --transport streamable-http --port 5050` | 多个客户端同时接入 |
-
-> 第一次接入先调 `ugf_guide`，它会把能力、工具清单、调用链一次性讲清楚。
+CI（[.github/workflows/ci.yml](file:///workspace/Universal-Game-Framework/.github/workflows/ci.yml)）会在 Python 3.11 / 3.13 上跑这两项。
 
 ---
 
-## ✨ 核心能力
-
-> 下面这些能力通过 MCP 提供给接入的 Agent；本仓库自带的 CLI 与监控大盘只是**调试件**，不是门面。
-
-| 能力 | 说明 |
-|------|------|
-| 🎬 **视频学习** | 解析教程视频，VLM 逐帧提取战术写入知识库 |
-| 🔮 **全实体预判** | 同时预判 BOSS / 精英 / 小怪未来 1.2s 位置，带置信度 |
-| ⚔️ **战斗评估** | 自身实力 vs 敌方威胁，动态决定 fight / cautious / retreat |
-| 🧠 **动态心态** | 面对不同怪物 + 自身实力，自动切换保守 / 均衡 / 激进 |
-| 👥 **组队协同** | 识别队友套装，自动分工：输出 / 辅助 / 掩护 |
-| 🕹️ **拟人操作** | 移动抖动 + 随机停顿 + 路径微扰，降低脚本感 |
-| 🧠 **BOSS 记忆** | 每 12s 批量记录 BOSS 行为习惯到知识库 |
-| 📝 **死亡复盘** | 连续 8 帧判定死亡（`death_frame_threshold` 可配），BOSS / 组队局自动生成复盘 |
-| 💬 **对话指挥** | `agent_cli.py` 交互式命令，像普通 Agent 一样问答编排 |
-| 🎚️ **自动调参** | 按命中率 / 死亡数自动微调战斗阈值，热加载生效 |
-| 🧩 **Skill + 外部 MCP** | 能接技能包、主动连外部 MCP，能力按需装配 |
-| 🎮 **游戏档案化** | 一款游戏一份 YAML 档案，切换游戏零改核心 |
-| 📊 **监控大盘** | 本地网页实时看指标卡 / BOSS 预判 / 日志 / 资源占用 |
-| 🔔 **自动汇报** | 每局结束自动出报告，可推送本地 / Webhook |
-| 💾 **导入导出** | 知识库打包备份 / 一键恢复，知识本地化可迁移 |
-| 📦 **多平台安装包** | Linux .deb / 便携版 / Windows EXE / Android APK |
-
----
-
-## 🔬 稀有度体系
-
-`Common < Unusual < Rare < Epic < Legendary < Mythic < Ultra < Super < Unique = Eternal`
-
-| 实体类型 | 对应稀有度 |
-|---|---|
-| `highest_boss` | Unique / Eternal（紧急避险） |
-| `boss` | Super |
-| `elite` | Ultra / Mythic / Legendary / Epic |
-| `normal` | Rare / Unusual / Common |
-
----
-
-## 🏗️ 当前架构
-
-```
-┌────────────────────────────────────────────────────────────┐
-│                   agent_cli.py 对话 / 命令行指挥             │
-│   detect → brief → research → ensure → play → report        │
-└──────────────┬──────────────────────────────┬─────────────┘
-               ▼                              ▼
-        ┌──────────────┐             ┌──────────────────┐
-        │  MCP Server  │             │   MCP Client     │
-        │  对外暴露工具  │             │  主动接外部服务    │
-        └──────┬───────┘             └────────┬─────────┘
-               │                              │
-        ┌──────▼────────┐            ┌────────▼─────────┐
-        │ game_profiles │◄──热加载──►│  核心引擎（通用）   │
-        │ 游戏档案(YAML) │            │ 感知/预判/评估/执行 │
-        └───────────────┘            └──────────────────┘
-```
-
----
-
-## 🎮 主界面：设置 → 游戏模式
-
-浏览器打开监控大盘后，顶部有两个入口：
-
-| 入口 | 路径 | 作用 |
-|---|---|---|
-| ⚙ 设置 | `/settings` | 查看运行模式、切换游戏档案、查看 MCP 注册信息 |
-| 🎮 打开游戏模式 | `/game` | 一键试跑 / 停止、实时看回合、死亡、决策、威胁预判与日志 |
-
-```bash
-python admin_panel.py          # 或 python launcher.py --ui auto
-# 打开 http://127.0.0.1:5002  →  ⚙ 设置  →  🎮 打开游戏模式
-```
-
-游戏模式里的「试跑 20 轮（dry-run）」**不会操作真实键鼠**，只跑完整链路，用来确认接线和配置没问题；确认无误后再关掉 dry-run 上真机。
-（面板监听 `0.0.0.0`，但 `/api/game/start|stop|switch` 三个控制接口**只接受本机 127.0.0.1 访问**，局域网无法起停进程。）
-
-## 🔌 作为 MCP 服务被其他 Agent 调用
-
-`mcp_server.py` 以 **stdio** 形式对外暴露 16 个工具，可直接注册进任意支持 MCP 的客户端：
-
-```json
-{
-  "mcpServers": {
-    "ugf": {
-      "command": "<你的 venv>/bin/python",
-      "args": ["/绝对路径/Universal-Game-Framework/mcp_server.py"],
-      "env": { "UGF_DRY_RUN": "1" }
-    }
-  }
-}
-```
-
-本项目已写入本机 `~/.workbuddy/mcp.json`（服务名 `ugf`）；在连接器管理页把它设为信任后即可被其他 Agent 调用。
-
-## ⚙️ 快速开始（调试用 CLI / 大盘）
-
-> 本节是**本地调试**用的：自带的对话 CLI、主循环、监控大盘。
-> 如果你只是想让别的 Agent 获得游戏能力，请回到 [🚀 装到你的 Agent 上（MCP）](#-装到你的-agent-上mcp)。
-
-```bash
-# 1. 安装依赖
-python3 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
-
-# 2. 配置 API
-cp .env.example .env   # 填入 LLM / VLM 密钥
-
-# 3. 启动感知服务（需 florr_powerful_tools 的 YOLO）
-python perception_server.py
-
-# 4. 进入对话 CLI（另一终端）
-python agent_cli.py            # 交互式；help 看全部命令
-python agent_cli.py -c report  # 或跑单条命令
-```
-
-**统一启动入口（推荐，v2.0 S11）**：
-
-```bash
-python launcher.py                      # 自动挑一个能跑的 UI（大盘 > Tk > CLI）
-python launcher.py --ui panel           # 强制用监控大盘（主 UI）
-python launcher.py --ui tk              # 强制用 Tk 离线备选
-python launcher.py --ui cli             # 直接进命令行（永可用）
-python launcher.py --dry-run --mock     # 离线演示：不碰键鼠 + 合成感知
-python launcher.py --ui auto --selftest # 只探测并打印选择结果（CI 用）
-```
-
-四套前端已收敛：`admin_panel.py`（纯标准库，主 UI）+ `ui_tkinter.py`（离线备选）；
-`ui/legacy/ui_pyqt.py`、`ui/legacy/ui_streamlit.py` 已归档，仅在显式 `--ui pyqt|streamlit` 时拉起。
-
-**一条命令拉起整套**：
-
-```bash
-bash start_all.sh    # 感知 + MCP + Agent 主循环 + 面板
-bash stop_all.sh     # 优雅停止
-```
-
-监控面板：浏览器打开 <http://127.0.0.1:5002>（页面「运行模式」卡片显示在线/dry-run 与感知后端）
-
----
-
-## 🧪 离线模式与自测
-
-没有实机、没有 X server、没有 API 密钥，也能把整条链路跑通 —— 冲刺期间所有验证都在这种条件下完成：
-
-| 开关 / 参数 | 作用 |
-|---|---|
-| `UGF_DRY_RUN=1` | 键鼠动作只记录不执行，明细落 `run_logs/dryrun_actions.log` |
-| `UGF_PERCEPTION_BACKEND=mock` | 感知服务改出合成场景（5 实体 + 1 队友，坐标恒定在场内） |
-| `--selftest` | 只探测不启动：`perception_server.py` / `launcher.py` 均支持 |
-| `--strict` | `game_profile_check.py` / `cli_smoke.py` / `mcp_tools_check.py` 的建议项也计入失败 |
-
-```bash
-UGF_DRY_RUN=1 python agent_main.py --rounds 5   # 主循环离线跑 5 轮
-python perception_server.py --selftest          # 感知自检（无 YOLO 自动降级 mock）
-python launcher.py --ui auto --selftest         # UI 可用性探测 + 选择结果
-python tools/cli_smoke.py --strict              # CLI 31 条命令矩阵
-python tools/mcp_tools_check.py --strict        # MCP 15 工具注册 / 调用 / 知识库往返
-```
-
----
-
-## ✅ 验证状态
-
-> 本节只写**真正跑过的结论**。凡标注「未验证」的，均需实机 / 联网环境才能确认 —— 不做任何推测性宣称。
-
-### 一条命令门禁
-
-```bash
-bash scripts/check.sh          # 全量 7 环节（约 4 分钟）
-bash scripts/check.sh --fast   # 秒级：语法 + 启动自检 + 档案校验
-```
-
-七个环节（S21 起 MCP 工具核对与 CLI 冒烟纳入门禁，M 阶段起安装契约也纳入）：
-`1` 语法编译 → `2` 启动自检 → `3` 游戏档案 → `4` 单元测试 → `5` MCP 工具核对 → `6` CLI 全命令冒烟 → `7` MCP 安装契约。
-退出码即失败环节编号，任一环节失败即整体非零。
-
-运行模式可观测（S21）：
-
-```bash
-python agent_cli.py -c mode     # 模式 / 感知后端 / LLM / VLM / 激活游戏
-```
-
-口径统一由 `config.runtime_mode()` 提供，大盘与 CLI 都从这里取，不存在第二套解析。
-
-### 已实测（离线，冲刺窗口 2026-09-21 ~ 09-22）
-
-| 项 | 结论 | 复核命令 |
-|---|---|---|
-| Python 语法 | 全仓库 `compileall` 通过 | `bash scripts/check.sh --fast` |
-| 单元测试 | **1025 用例全绿** | `python -m pytest tests/ -q` |
-| 启动自检 | 本机 ERROR 0 / WARN 6，每条附「修复 + 降级」指引 | `python boot_check.py` |
-| 游戏档案 | florr / space_invaders 两份 `--strict` 全过 | `python game_profile_check.py --all --strict` |
-| MCP 工具 | 16 个工具可注册 / 可调用 / schema 正确 + 知识库往返保真 | `python tools/mcp_tools_check.py --strict` |
-| CLI | 31 条命令矩阵，0 traceback、0 卡死 | `python tools/cli_smoke.py --strict` |
-| 主循环 | 离线 5 轮跑通：感知 → 预判 → 决策 → 动作 → 记忆 → 复盘 → 汇报 | `UGF_DRY_RUN=1 python agent_main.py --rounds 5` |
-| 统一启动器 | UI 探测 / 选择 / 离线开关透传全部可验 | `python launcher.py --ui auto --selftest` |
-| 运维脚本 | 启停 dry-run 零副作用；日志轮转与临时清理已沙箱实测 | `bash start_all.sh --dry-run` |
-| **P3 跨宿主** | **成立 ✅** —— 3 个宿主（workbuddy / opencode / vscode）、3 种配置 schema，各 16 工具**完全一致**，未改本项目代码 | `python tools/verify_portability.py` |
-| **P2 闭环 A/B** | **成立 ✅** —— 知识组存活率高 **10~20 个百分点**，HP 中位高 32~40，被击中少 4~5 次（三批 seed 复现，离线 arena） | `python ab_experiment.py --n 20` |
-
-### 未验证（受本机环境限制，非代码缺陷）
-
-| 能力 | 阻塞原因 | 降级方式 |
-|---|---|---|
-| 真实 LLM / VLM 决策 | 无 `.env` 密钥 | 走 `_fallback_decide` 规则分支 |
-| 真实截图 + YOLO 感知 | 无 X server、无模型权重 | 感知自动降级到 mock 后端 |
-| 键鼠实际操作 | 无 GUI | dry-run 只记录不执行 |
-| 联网教程检索 / Webhook 推送 | 无外部 MCP、无网络 | 注入假 `requests`、返回降级提示 |
-| 容器镜像构建 | 本机无 docker | 仅静态口径对齐 + headless 替换 |
-| **真实对局中的知识增益** | 无实机（见上表 P2 行） | arena 模拟里已证伪：知识库现有内容有害 |
-| GUI 真实渲染（Tk / PyQt / Streamlit） | 无 X server / 未安装 | 仅验证可用性与命令构造 |
-
-**在 headless 机器（服务器 / 容器 / CI）上跑门禁**：`boot_check` 现在会把
-「装了但导入失败」也算进可降级项（例如无头环境下 `import pyautogui` 抛
-`DisplayConnectionError`），报 WARN 而非 ERROR，退出码 0。
-早期版本只捕获 `ImportError`，异常会直接冒出去让自检崩掉，
-在任何无显示器的机器上门禁恒红。
-
-### ✅ P3 实证：换宿主不改一行代码
-
-按各宿主的配置**真的把服务拉起来**、走 MCP stdio 协议握手、比对工具集：
-
-| 宿主 | 配置 schema | 工具数 |
-|------|-------------|--------|
-| workbuddy | `mcpServers` + 字符串 command + `env` | 16 |
-| opencode | `mcp` + **数组** command + `environment` + `type` | 16 |
-| vscode | `servers` + 字符串 command + `env` | 16 |
-
-**三种形状不同，工具集完全一致。**
-
-本轮为此修了两个 bug：install_mcp 只认 `opencode.json`（实际是 `.jsonc`），
-且生成的形状不对（opencode 要数组 command + `environment`）——
-也就是之前**根本装不上** opencode。
-
-复现：`python tools/install_mcp.py --list` 看各宿主现状，
-`python tools/verify_portability.py` 验一致性。
-
-**第二层：宿主 LLM 真的会用**（`tools/verify_live_usage.py`）
-
-不只是「工具在列表里」—— 让 opencode 自己的模型去调，取回的数据
-必须来自 ugf：
-
-| 探针 | 判据（ugf 独有） | 结果 |
-|------|------------------|------|
-| `ugf_guide` | 含 `kb_export` / `kb_import` | ✓ |
-| `kb_list` | 含 `boss_behavior_log` / `learning_stats` | ✓ |
-| `query_boss_history` | mantis 的 BOSS 行为记录 | ✓ |
-
-**3/3 通过。** `opencode mcp list` 也自报 `✓ ugf connected`。
-
-⚠️ 限定：**跨机器（换 OS / Python 版本）未验**，宿主长期升级后的兼容性未验。
-
----
-
-### ✅ P2 实证：知识闭环确实产生增益（限定离线环境）
-
-A/B 实验（`arena.py` 可复现模拟，三批 seed 各 20~25 组 × 200 回合）：
-
-| 组 | 存活率 | HP 中位 | 被击中 | 撤离率 |
-|----|--------|---------|--------|--------|
-| baseline（无决策层） | 0% | 0.0 | 13 | 0% |
-| no_kb（有决策层，无知识） | 80~90% | 4.0 | 12 | 80~90% |
-| **kb（有决策层 + 知识）** | **100%** | **36~44** | **7~8** | **100%** |
-
-**知识的额外增益：存活率 +10~20 个百分点，HP 中位 +32~40，被击中少 4~5 次。**
-
-这个结论是被**三轮实验反复打脸才拿到的**：
-
-1. 第一轮：知识组**少活 5 回合**（证伪）
-2. 定位到根因在入库侧 —— 条目没有适用条件，`extract_tactics`
-   只能靠关键词猜，于是「撤退」二字出现在哪就抽 `retreat` 标签
-3. 修完条件门控仍不生效，又查出 `except TypeError` 吞掉了谓词签名错误，
-   导致「低血量」条件**永不匹配**
-4. 同时发现 arena 里 player 不能输出也不能撤离，
-   「集火」「撤退」两类知识在结构上就没有可用空间 —— 补上后才测得出
-
-完整过程见 [devplan/P2_AB_EXPERIMENT.md](devplan/P2_AB_EXPERIMENT.md)。
-
-⚠️ **限定条件**：结论来自离线模拟，**不能外推到实机**。
-arena 不是真实游戏，也没有真实游戏的操作延迟与视听反馈。
-
-复现：`python arena.py --self-test && python ab_experiment.py --n 20`
-
-冲刺全记录见 [devplan/PROGRESS.md](devplan/PROGRESS.md)，阶段计划见 [devplan/PLAN.md](devplan/PLAN.md)，运维口径见 [devplan/OPS.md](devplan/OPS.md)。
-
----
-
-## 📦 安装包
-
-```bash
-python tools/build_dist.py all      # Linux .deb + 便携版
-```
-
-Windows EXE / Android APK 见 [packaging/README.md](packaging/README.md)。
-
----
-
-## 🧩 MCP 工具（16 个）
-
-| 类别 | 工具 |
-|------|------|
-| 📚 知识库 | `kb_list` `kb_search` `kb_write` `kb_append` `kb_export` `kb_import` |
-| 👁️ 感知 | `perceive_game` `predict_all_entities` `reset_predictor` |
-| 🕹️ 动作 | `game_action` `switch_set` `handle_afk` |
-| 🧹 维护 | `clean_cache` `query_boss_history` `switch_tactic` |
-| 📖 手册 | `ugf_guide`（返回本服务使用手册，第一次接入先调它） |
-
----
-
-## 📁 文件结构
+## 目录结构
 
 ```
 Universal-Game-Framework/
-├── agent_cli.py             # 对话指挥入口（交互 + -c 单命令）
-├── agent_main.py            # MCP Client 主循环
-├── mcp_server.py            # MCP 服务端
-├── mcp_connector.py         # 外部 MCP 连接
-├── predictor.py             # 全实体运动预判
-├── combat_judge.py          # 战斗评估 / 套装 / 组队 / 心态
-├── perception_server.py     # YOLO 感知 HTTP 服务
-├── video_learner.py         # 视频学习
-├── video_sources.py         # 视频来源
-├── session.py               # 会话记忆
-├── report_notifier.py       # 自动汇报
-├── kb_maintainer.py         # 知识库压缩 / 归档 / 导入导出
-├── auto_tuner.py            # 自动调参
-├── game_profile_check.py    # 档案自检
-├── boot_check.py / watchdog.sh / Dockerfile / florr-agent.service.example  # 稳定性
-├── launcher.py              # 统一启动入口（v2.0：自动选 UI + 离线开关透传）
-├── admin_panel.py           # 监控大盘（主 UI，纯标准库）
-├── ui_tkinter.py            # 离线备选 UI
-├── ui/legacy/               # 已归档：ui_pyqt.py / ui_streamlit.py（DEPRECATED）
-├── cli_ui.py                # 终端界面
-├── config.py / config.yaml  # 参数 + 热加载
-├── ui_tkinter.py            # 离线备选 UI
-├── ui/legacy/               # 已归档：ui_pyqt.py / ui_streamlit.py（DEPRECATED）
-├── cli_ui.py                # 终端界面
-├── game_profiles/           # 游戏档案：florr.yaml / space_invaders.yaml
-├── skills/                  # 技能包
-├── tools/                   # add_game.py / build_dist.py / cli_smoke.py / mcp_tools_check.py / static_audit.py
-├── tests/                   # 30 个测试文件（987 用例，离线可跑）
-├── scripts/check.sh         # 一条命令门禁
-├── devplan/                 # PLAN / PROGRESS / AUDIT / OPS / TOOLS / PROFILE_SPEC / DIRECTION
-├── packaging/               # Windows EXE / Android APK 构建
-├── start_all.sh / stop_all.sh / watchdog.sh  # 一键启停 + 看门狗
-├── knowledge_md/            # 自动创建，MD 知识库
-├── knowledge_archive/       # 自动创建，超限归档区
-└── run_logs/                # 自动创建，回合日志 / 汇报 / dry-run 动作明细
+├── agent.py              # 全部能力都在这里（单文件 Agent）
+├── config.yaml           # 全局配置（阈值 / 路径，可热加载）
+├── game_profiles/        # 游戏档案：florr / demo_arcade / space_invaders
+├── tests/                # 精简测试
+├── requirements.txt      # 依赖（核心只有 pyyaml + requests）
+├── pyproject.toml
+├── Dockerfile
+└── README.md
 ```
 
----
-
-## 🗺️ 路线图（Roadmap）
-
-| 版本 | 主题 | 状态 |
-|------|------|------|
-| v0.1 ~ v0.9 | 从 Florr 初版 → 完整 MCP / Skill / 游戏档案化 | 代码已落地 ✅ --- 实机未验证 ⚠️ |
-| v1.0 | 稳定底座版：对话指挥 + 接 MCP + Skill + 一键部署 | 代码已落地 ✅ --- 实机未验证 ⚠️ |
-| v1.1 ~ v1.9 | 监控大盘 / 自动汇报 / 档案登记 / 会话记忆 / 战绩 / 定时汇报 / 档案自检 / 安装包 | 代码已落地 ✅ --- 实机未验证 ⚠️ |
-| 🚧 **v2.0** | **地基做实：可导入 / 可离线跑通 / 有测试 / 有门禁 / 文档与代码一致** | 进行中（S1~S13 见 PROGRESS） |
-
-> ⚠️ **口径说明**：v0.1~v1.9 的「已完成」指**功能代码已存在且通过离线单测/冒烟**，不代表在真实 Florr.io 对局中验收过 —— 真实 LLM 决策、截图感知、键鼠操作在本机均无条件实测。判定依据见上方 [验证状态](#-验证状态)。
-
-### 文档地图
-
-| 文档 | 讲什么 |
-|------|--------|
-| [docs/MCP_INSTALL.md](docs/MCP_INSTALL.md) | 装进你的 Agent（三分钟） |
-| [docs/MCP_EXAMPLES.md](docs/MCP_EXAMPLES.md) | 装上之后怎么调 |
-| [docs/FAQ.md](docs/FAQ.md) | 常见问题 |
-| [docs/FUTURE.md](docs/FUTURE.md) | **未来全景蓝图** —— 三个核心命题、v2→v5 分阶段计划、25 个研究课题、风险清单、里程碑时间表、OKR。含「反向假设检验」：如果这些判断错了会怎样 |
-| [SECURITY.md](SECURITY.md) | 安全边界与合规红线 |
-| [ROADMAP.md](ROADMAP.md) | 已完成版本的详细记录 |
-| [PROJECT_SUMMARY.md](PROJECT_SUMMARY.md) | 原理与部署详解 |
-| [devplan/](devplan/) | **内部推进记录**（冲刺计划、审计、运维口径）—— 非对外承诺 |
-
-> ⚠️ **`devplan/` 是内部工单，不是产品文档。** 里面的阶段划分与日期只反映当时的推进计划，不代表已交付。看 [验证状态](#-验证状态) 那一节判断什么是真的。
+运行期会自动生成（已在 `.gitignore` 中忽略）：
+`knowledge_md/`（经验本）、`run_logs/`（日志与报告）、`agent_state.json`、`session_history.json`。
 
 ---
 
-<div align="center">
+## License
 
-**路线：从 Florr.io 专用，走向通用游戏 Agent** — 持续进化中 🚀
-
-</div>
-
-## 工具链
-
-- **截图**：X11 `mss` 原生 grab，60+ms
-- **检测**：Ultralytics YOLO + 自定义训练
-- **感知服务**：Flask HTTP / 本地合成 mock / 无头回退
-- **决策**：PERCEPTION-PREDICT-JUDGE-ACT-LOOP
-- **交互**：X11 动作注入 + 拟人化偏移
-
-## 已知限制
-
-1. 本机 CPU 不支持 AVX，无法本地训练 YOLO
-2. COCO 权重识别游戏实体精度受限
-3. 长时间不操作会触发 AFK 验证
-
-## 许可
-
-MIT License
+MIT，见 [LICENSE](file:///workspace/Universal-Game-Framework/LICENSE)。

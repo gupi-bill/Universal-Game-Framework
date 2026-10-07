@@ -5,17 +5,6 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-  schedule:
-    # 服务端定时健康检查：每 2 小时一次（UTC）。
-    #
-    # 为什么不写成每 30 分钟（*/30）：GitHub 免费账户每月 2000 分钟额度。
-    #   */30  => 1440 次/月，按 GitHub 最小计费 1 分钟/次 ≈ 1440 分钟，
-    #           再叠加 push 触发的全量 CI（每次 3~5 分钟）必然超额。
-    #   */120 =>  360 次/月 ≈ 360~720 分钟，额度安全。
-    # 若确实需要 30 分钟粒度，得改用付费额度，或把「30 分钟推进计划」交给
-    # WorkBuddy 自动化面板（AI 侧，见 devplan/AUTOMATION_CONFIG.md），
-    # GitHub Actions 只负责确定性的健康检查。
-    - cron: '0 */2 * * *'
   workflow_dispatch:
 
 permissions:
@@ -29,19 +18,16 @@ jobs:
   test:
     name: pytest (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
-        # 用 3.13：与本机已验证通过的环境一致（本机 py3.13 全量 962 passed）。
-        # 曾用 3.11 跑出 19 秒即失败（收集阶段崩溃，日志需 repo admin 权限看不到具体报错），
-        # 在查明前先用已验证版本，避免 CI 长期挂红。
-        # 单版本：矩阵多版本会让定时任务的分钟消耗成倍增加，额度吃不消。
-        python-version: ['3.13']
+        python-version: ['3.11', '3.13']
 
     env:
-      # 无头环境：键鼠 / 截图全部走 dry-run 与 mock 分支。
+      # 无头环境：感知走 mock、动作走 dry-run，不碰键鼠与其他服务。
       UGF_DRY_RUN: '1'
+      UGF_PERCEPTION_BACKEND: 'mock'
 
     steps:
       - uses: actions/checkout@v4
@@ -51,47 +37,17 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
-      - name: 安装依赖（core + dev）
+      - name: 安装依赖
         run: |
-          python -m pip install --upgrade pip setuptools wheel
-          # 先装构建后端再 -e .：否则在干净环境里 pip install -e . 会报缺 setuptools。
-          pip install -e .
-          pip install -r requirements-dev.txt
-          # pyproject 的 dependencies 漏了 flask（admin_panel.py 需要），这里补装。
-          pip install "flask>=3.0.0"
-        # 刻意不装 requirements.txt 的 optional 段（pyautogui / pillow / opencv-python）：
-        # 无头 CI 用不到，且 opencv-python 在 ubuntu runner 上常因缺 libGL.so.1 导入失败。
-        # 项目代码对这些包已内置 mock / dry-run 降级，不装不影响测试。
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
 
-      - name: 冒烟检查（定时触发时）
-        if: github.event_name == 'schedule'
-        run: |
-          python -c "import mcp_server; print('mcp_server import ok: OK')"
-          python -m pytest tests/test_mcp_version.py tests/test_mcp_server.py -q
+      - name: 单元测试
+        run: python -m pytest tests/ -q
 
-      - name: 全量测试（push / PR 时）
-        if: github.event_name != 'schedule'
-        run: |
-          # tee 保留输出：CI 日志本身要 repo admin 权限才看得到，
-          # 失败后由下一步把报错尾部写进 job summary（公开可读），便于定位。
-          python -m pytest tests/ -q --tb=short 2>&1 | tee pytest_out.txt
-          exit ${PIPESTATUS[0]}
-
-      - name: 失败诊断（报错尾部写入 job summary）
-        if: failure()
-        run: |
-          echo "### pytest 失败输出（尾部 80 行）" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          tail -80 pytest_out.txt >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          # annotation 在 run 页面无需登录即可见：把输出尾部逐行抛成 annotation，
-          # 这样即使日志要 admin 权限、summary 抓不到，也能读到真实报错。
-          # 注意：GitHub 每个 step 最多 ~10 条 annotation，所以只抛最关键的行
-          # （失败用例名 + 末尾统计行），不要抛进度条，否则会被截断。
-          { grep -aE "^(FAILED|ERROR)" pytest_out.txt | head -5; tail -3 pytest_out.txt; } |
-          while IFS= read -r line; do
-            echo "::error::$line"
-          done
+      - name: 端到端自检（离线全链路）
+        run: python agent.py selftest
 
       - name: 静态检查（不阻断）
-        run: ruff check . || true
+        run: pip install ruff && ruff check . || true

@@ -1,116 +1,37 @@
 # Python
 __pycache__/
 *.py[cod]
-*$py.class
 venv/
 .venv/
-env/
 
-# 环境变量（密钥绝不入库）
+# 密钥
 .env
-*.env
 
-# 知识库（本地生成，按需决定是否提交）
+# 运行期产物（本地生成，不入库）
 knowledge_md/
-
-# 视频帧缓存
-video_frames/
-# 运行日志
-run_logs/
-
-# 会话状态（运行时生成，不入库）
-agent_state.json
-
-# v1.5 多局战绩历史（运行时生成，不入库）
-session_history.json
-
-# v1.9 打包产物（dist_win 是 Windows 构建目录）
-dist/
-dist_win/
-build/
-*.spec~
-
-# S1 · 构建产物与大二进制（曾经误入版本库，已从索引移除，磁盘文件保留）
-.buildozer/
-.gradle/
-*.apk
-*.aab
-*.tar.gz
-*.zip
-*.db
-
-# IDE / 编辑器产物
-.trae-html-share-packages/
-.trae/
-
-# v1.0 自动调参覆盖 + 知识库归档目录（运行时生成）
-tuned_overrides.yaml
 knowledge_archive/
-
-# v2.0 知识库导出备份（运行时生成）
 kb_backups/
+video_frames/
+run_logs/
+agent_state.json
+session_history.json
+tuned_overrides.yaml
 
-# 临时截图
-/tmp/florr_frame.png
-*.png
-*.jpg
-
-# 系统
-.DS_Store
-Thumbs.db
-
-# IDE
-.vscode/
-.idea/
-
-# Agent 工作区状态（自动化记忆 / 会话数据，不入库）
-.workbuddy/
-
-# 文档审计本地备份（v1.1，不入库）
-FUTURE.md.orig-v1.0
-
-# ---- Android 交叉编译产物（buildozer 下载的第三方源码包，单个就 30MB）----
-# 2026-09-30：这些曾被提交进历史，导致仓库 130MB。
-# 已用 git-filter-repo 从全部提交中剥离，并在此显式忽略。
-packaging/androidapp/.buildozer/
-packaging/androidapp/bin/
-packaging/androidapp/.gradle/
-packaging/androidapp/build/
-packaging/androidapp/*.apk
-packaging/androidapp/*.aab
-
-# ---- 测试与工具缓存 ----
+# 缓存
 .pytest_cache/
 .ruff_cache/
-.mypy_cache/
-.tox/
-.nox/
 .coverage
-.coverage.*
 htmlcov/
-coverage.xml
 
-# ---- 自动化 / 编辑器 / 系统 ----
-.workbuddy/
-.trae/
-*.orig
-*.rej
-*.bak
-*~
+# 图片 / 视频
+*.png
+*.jpg
+*.mp4
+
+# 编辑器 / 系统
+.vscode/
+.idea/
 .DS_Store
 Thumbs.db
-desktop.ini
-
-# 外部依赖仓库（自行 clone，见 README「外部依赖」一节）。
-# 本地放的是 stub 脚本，用于验证「真实截图 → 契约」链路，不是真 YOLO。
-florr_powerful_tools/
-
-# YOLO 权重（6MB 二进制，体积大不入库；用下方命令获取）
-models/
-
-datasets/
-yolov8n.pt
-
-auto_train.py 不用
-training_runs/
-training_logs/
+*.bak
+*~
