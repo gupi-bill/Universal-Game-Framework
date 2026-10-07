@@ -80,6 +80,19 @@ jobs:
           pip install mypy
           mypy agent.py || echo "::warning::mypy 发现类型问题（第一阶段不阻断）"
 
+  docker:
+    name: Docker 镜像构建冒烟（ROADMAP #23）
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 构建镜像（多阶段）
+        run: docker build -t ugf-agent .
+
+      - name: 容器内离线自检
+        run: docker run --rm ugf-agent selftest
+
   secret-scan:
     name: 密钥防泄漏扫描
     runs-on: ubuntu-latest
