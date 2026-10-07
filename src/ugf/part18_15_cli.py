@@ -15,7 +15,7 @@ GUIDE = """# Universal-Game-Framework · 单文件游戏 Agent 使用手册
 ## 全部命令
     run      主循环（--rounds N / --interval S / --hours H / --resume / --game NAME / --dry-run）
     mode     查看运行模式（dry-run / 感知后端 / LLM / VLM / 当前游戏）
-    guide    本手册
+    guide    本手册（--en 或 AGENT_LANG=en 输出英文版）
     perceive 手工取一帧画面状态
     predict  手工取一帧 + 全实体 1.2s 预判
     action   执行一个动作：action move --x 100 --y 200 / action attack
@@ -30,7 +30,7 @@ GUIDE = """# Universal-Game-Framework · 单文件游戏 Agent 使用手册
     bench    性能基准：--rounds N，分段计时 感知/预判/评估/决策/动作
     panel    本地监控面板（纯标准库，只读快照/事件/日志，Ctrl+C 停止）
     logs     查看运行日志：--tail N / --grep KW / --events --kind decision / --stats
-    session  看会话记忆与历史战绩（--all 全部游戏汇总）
+    session  看会话记忆与历史战绩（--all 全部游戏 / --report 统计报告 [--save 落盘]）
     brief    开局侦察报告：档案/知识库/战绩/调参一屏聚合
     replay   对局回放：事件时间线（--tail N 只看最后 N 条）
     tune     自动调参：tune --status / tune --reset
@@ -51,6 +51,63 @@ GUIDE = """# Universal-Game-Framework · 单文件游戏 Agent 使用手册
 - 预判需要 ≥3 帧历史才有效；confidence < 0.65 时 prediction_trusted=false，别信预判坐标。
 - 换局 / 重生后先 `kb clean --target predict`，避免用旧轨迹误判。
 - 合规：仅用于本地 / 自建 / 已授权环境，不提供任何绕过他人服务条款的手段。
+"""
+
+
+GUIDE_EN = """# Universal-Game-Framework · Single-file Game Agent Manual
+
+## What it is
+A game agent that runs itself: see the screen -> predict motion -> evaluate combat ->
+act -> consult/write experience -> review -> report. No MCP server, no external agent
+runtime — one command and it plays.
+
+## Three commands to get started
+    python agent.py run --dry-run --rounds 20   # offline trial (no keyboard/mouse)
+    python agent.py run                          # live run (needs perception + pyautogui)
+    python agent.py guide                        # this manual
+
+## All commands
+    run        main loop (--rounds N / --interval S / --hours H / --resume / --dry-run)
+    mode       show runtime mode (dry-run? backend? LLM? current game?)
+    guide      this manual (--en for English)
+    doctor     environment check: deps / dirs / profile / perception / keys
+    config-check  validate config.yaml & tuned_overrides.yaml
+    profile-check [game] [--all] [--strict]   validate game profiles
+    brief      pre-game reconnaissance: profile / knowledge / record / tuner in one screen
+    bench      performance benchmark: per-stage timing (--rounds N)
+    perceive / predict    manual single-frame inspection
+    action / set / afk    manual action, loadout switch, AFK-popup guidance
+    kb         knowledge base: list/search/write/append/export/import/boss(--top N)/
+               tactic/clean/history/rollback/maintain/stats
+    learn      video learning: learn video.mp4  or  learn --url <link> --frames 5
+    report     generate a match report (run_logs/, optional webhook)
+    session    session memory & history (--all for all games, --report for stats)
+    replay     match replay timeline from events.jsonl (--tail N)
+    logs       run logs: --tail N / --grep KW / --events --kind decision / --stats
+    panel      local read-only monitoring dashboard (stdlib only, Ctrl+C to stop)
+    tune       auto-tuner: tune --status / tune --reset
+    selftest   offline end-to-end self check (19 assertions)
+
+## Key switches (environment variables)
+    UGF_DRY_RUN=1              log actions without touching keyboard/mouse
+    UGF_PERCEPTION_BACKEND=... mock / http / local (ONNX) / template (OpenCV matching)
+    UGF_PERCEPTION_URL=...     external perception service URL (http backend)
+    UGF_HOME=...               runtime data dir (knowledge/logs/state; default ~/.ugf
+                               when installed via pip or running the zipapp)
+    AGENT_GAME=space_invaders  switch game profile (game_profiles/<name>.yaml)
+    AGENT_LANG=en              English manual & messages where available
+    LLM_API_URL / LLM_API_KEY / LLM_MODEL     LLM decision brain (OpenAI-compatible)
+    VLM_API_URL / VLM_API_KEY / VLM_MODEL     vision model for video learning
+    UGF_WEBHOOK_URL=...        report push endpoint
+
+## Notes
+- Perception payload contract (for http/local/template backends):
+  {"player":{...},"entities":[{raw_id,rarity,x,y}],"teammates":[...],"afk_popup":false}
+- Prediction needs >= 3 frames; confidence < 0.65 => prediction_trusted=false,
+  do not rely on predicted coordinates.
+- After a new round / respawn run `kb clean --target predict` to drop stale tracks.
+- Compliance: for local / self-hosted / authorized environments only. This project
+  provides no means to circumvent other services' terms.
 """
 
 
@@ -210,11 +267,14 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--resume", action="store_true", help="从循环检查点续跑（ROADMAP v2 #6）")
 
     sub.add_parser("mode", help="查看运行模式")
-    sub.add_parser("guide", help="使用手册")
+    sp = sub.add_parser("guide", help="使用手册")
+    sp.add_argument("--en", action="store_true", help="English manual")
     sub.add_parser("perceive", help="手工取一帧画面状态")
     sub.add_parser("predict", help="手工取一帧 + 全实体预判")
     sp = sub.add_parser("session", help="会话记忆与历史战绩")
     sp.add_argument("--all", action="store_true", help="全部游戏汇总（ROADMAP v2 #5）")
+    sp.add_argument("--report", action="store_true", help="战绩统计报告（ROADMAP v2 #20）")
+    sp.add_argument("--save", action="store_true", help="统计报告落盘 run_logs/session_report.md")
     sub.add_parser("afk", help="AFK 弹窗处理指引")
 
     sp = sub.add_parser("action", help="执行一个动作")
@@ -317,7 +377,10 @@ def main(argv=None) -> int:
 
     cmd = args.cmd
     if cmd == "guide":
-        print(GUIDE)
+        want_en = bool(getattr(args, "en", False)) or str(
+            os.getenv("AGENT_LANG", "")
+        ).strip().lower().startswith("en")
+        print(GUIDE_EN if want_en else GUIDE)
     elif cmd == "mode":
         _print(runtime_mode())
     elif cmd == "run":
@@ -358,7 +421,10 @@ def main(argv=None) -> int:
     elif cmd == "report":
         notify()
     elif cmd == "session":
-        print(session_summary(all_games=args.all))
+        if args.report:
+            print(session_report(save=args.save))
+        else:
+            print(session_summary(all_games=args.all))
     elif cmd == "brief":
         return brief(args.game)
     elif cmd == "replay":

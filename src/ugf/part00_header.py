@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Universal-Game-Framework · 单文件游戏 Agent  (v3.1)
+Universal-Game-Framework · 单文件游戏 Agent  (v3.2)
 =====================================================
 
 一个**能自己跑**的游戏智能体：不依赖任何别的 Agent，不需要装成 MCP 服务。
@@ -69,7 +69,7 @@ def _resolve_base_dir() -> str:
 
 BASE_DIR = _resolve_base_dir()
 
-VERSION = "3.1.0-single"
+VERSION = "3.2.0-single"
 
 
 # ---------------------------------------------------------------------------

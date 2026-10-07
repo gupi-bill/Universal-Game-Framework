@@ -50,14 +50,15 @@
 | 5 | 知识闭环 | 战术条件解析、知识闸门、决策影响 | `extract_tactics` `decide_action` |
 | 6 | 感知 | 四后端插件化，统一 payload | `Perception` |
 | 7 | 动作 | 拟人化执行、dry-run、DPI/坐标换算 | `game_action` `switch_set` |
-| 8 | 会话 | 断点续玩、战绩历史（版本化迁移） | `session_load` `_read_history` |
+| 8 | 会话 | 断点续玩、战绩历史（v2 按游戏分区）、循环检查点、战绩统计报告 | `session_load` `session_report` `_write_checkpoint` |
 | 9 | 复盘 | 触发判定、模板渲染、BOSS 行为归纳、快照 | `review_round` `analyze_boss_behavior` |
 | 10 | 汇报 | Markdown 报告、Webhook、局中进度 | `generate_report` `notify` |
 | 11 | 调参 | 战损驱动阈值微调 + 审计 + 锁定 | `auto_tune` |
 | 12 | 视频学习 | 抽帧、感知哈希、VLM 提战术、投票、去重 | `learn_from_video` |
 | 13 | LLM 大脑 | 结构化决策 + 修复重试 + 规则兜底 | `llm_decide` `fallback_decide` |
 | 14 | 主循环 | 九步编排 + 安全暂停 + 收尾 | `run_agent` |
-| 14a | 面板 | 只读监控 HTTP 服务（可选启动） | `run_panel` |
+| 14a | 面板 | 只读监控 HTTP 服务 + /healthz（可选启动） | `run_panel` |
+| 14b | 诊断与基准 | 环境体检 / 分段计时 / 事件统计 / 对局回放 / 侦察报告 / 配置体检 | `doctor` `bench` `event_stats` `replay` `brief` `config_check` |
 | 15 | CLI | argparse 子命令 + 端到端自检 | `main` `selftest` |
 | 15a | 档案校验 | 游戏档案静态检查 | `profile_check` |
 

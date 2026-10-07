@@ -204,6 +204,55 @@ def resume_info() -> str:
     )
 
 
+def session_report(save: bool = False) -> str:
+    """ROADMAP v2 #20：历史战绩统计报告（按游戏分组 + 近 7 天趋势）。"""
+    from collections import defaultdict
+
+    played = _history_all()
+    if not played:
+        return "暂无战绩历史（先跑一局：python agent.py run --dry-run --rounds 20）"
+    by_game: dict = defaultdict(list)
+    for r in played:
+        by_game[safe_name(str(r.get("game") or "")) or "default"].append(r)
+    lines = ["== 战绩统计报告 =="]
+    total_r = total_d = 0
+    for g, recs in sorted(by_game.items()):
+        rounds = sum(safe_int(r.get("rounds")) for r in recs)
+        deaths = sum(safe_int(r.get("deaths")) for r in recs)
+        total_r += rounds
+        total_d += deaths
+        best = max(recs, key=lambda r: safe_int(r.get("rounds")))
+        worst = min(recs, key=lambda r: safe_int(r.get("rounds")))
+        rate = (deaths / rounds * 100) if rounds else 0.0
+        lines.append(f"[{g}] {len(recs)} 局 ｜ {rounds} 回合 / {deaths} 死亡 ｜ 死亡率 {rate:.1f}%")
+        lines.append(
+            f"       最佳 {safe_int(best.get('rounds'))} 回合（{best.get('at')}）"
+            f" ｜ 最短 {safe_int(worst.get('rounds'))} 回合"
+        )
+    rate_all = (total_d / total_r * 100) if total_r else 0.0
+    lines.append(f"[总计] {len(played)} 局 ｜ {total_r} 回合 / {total_d} 死亡 ｜ 死亡率 {rate_all:.1f}%")
+    days: dict = defaultdict(lambda: [0, 0])
+    for r in played:
+        d = str(r.get("at") or "")[:10]
+        if d:
+            days[d][0] += safe_int(r.get("rounds"))
+            days[d][1] += safe_int(r.get("deaths"))
+    recent = sorted(days.items())[-7:]
+    if len(recent) > 1:
+        lines.append("[近7天] " + " | ".join(f"{d[5:]}: {v[0]}回合/{v[1]}死" for d, v in recent))
+    text = "\n".join(lines)
+    if save:
+        try:
+            os.makedirs(RUN_LOGS, exist_ok=True)
+            p = os.path.join(RUN_LOGS, "session_report.md")
+            with open(p, "w", encoding="utf-8") as f:
+                f.write("# 战绩统计报告\n\n" + text + "\n")
+            log(f"[战绩] 报告已保存: {p}")
+        except OSError as e:
+            log(f"[战绩] 报告保存失败: {e}")
+    return text
+
+
 def _read_json(path: str, default):
     try:
         with open(path, encoding="utf-8") as f:

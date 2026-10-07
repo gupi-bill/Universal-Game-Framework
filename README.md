@@ -155,6 +155,8 @@ CI（[.github/workflows/ci.yml](./.github/workflows/ci.yml)）会在 Python 3.11
 | [docs/architecture.md](docs/architecture.md) | 分层架构、数据流、模块地图、配置优先级、可靠性设计 |
 | [docs/game-profile-guide.md](docs/game-profile-guide.md) | 30 分钟接入一款新游戏（含常见错误速查） |
 | [docs/faq.md](docs/faq.md) | 安装 / 感知 / 知识库 / 排障 / 合规常见问题 |
+| [docs/demo.md](docs/demo.md) | 5 分钟 Demo 走查（`bash tools/demo.sh` 一键版） |
+| [docs/windows-service.md](docs/windows-service.md) | Windows / Linux 常驻运行（计划任务 / NSSM / systemd） |
 | [ROADMAP.md](ROADMAP.md) | 技术优化路线图（26 项，v3.1.0 已全部落地） |
 | [CHANGELOG.md](CHANGELOG.md) | 版本变更记录 |
 
@@ -168,7 +170,7 @@ Universal-Game-Framework/
 ├── config.yaml           # 全局配置（阈值 / 路径 / 降级链，可热加载）
 ├── game_profiles/        # 游戏档案：florr / demo_arcade / space_invaders
 ├── docs/                 # 架构 / 新游戏接入指南 / FAQ
-├── tests/                # 116 项测试（含故障注入）
+├── tests/                # 150+ 项测试（含故障注入与 fuzz）
 ├── tools/secret_scan.py  # 密钥防泄漏扫描（pre-commit + CI）
 ├── src/ugf/              # 模块化分片源（build.py split/agent 与单文件互转）
 ├── build.py              # 构建工具：zipapp 分发 + 分片↔单文件互转与一致性校验

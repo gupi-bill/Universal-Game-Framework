@@ -371,3 +371,47 @@ def test_config_check_multilevel_namespace(tmp_path, monkeypatch):
     monkeypatch.setattr(agent, "CONFIG_PATH", str(cfg))
     monkeypatch.setattr(agent, "TUNED_PATH", str(tmp_path / "none.yaml"))
     assert agent.main(["config-check"]) == 0
+
+
+# ---------------------------------------------------------------------------
+# v2#19 英文 GUIDE
+# ---------------------------------------------------------------------------
+def test_guide_en_via_flag(capsys):
+    assert agent.main(["guide", "--en"]) == 0
+    out = capsys.readouterr().out
+    assert "Single-file Game Agent Manual" in out and "使用手册" not in out
+
+
+def test_guide_en_via_env(monkeypatch, capsys):
+    monkeypatch.setenv("AGENT_LANG", "en_US")
+    assert agent.main(["guide"]) == 0
+    assert "Key switches" in capsys.readouterr().out
+
+
+def test_guide_default_chinese(capsys, monkeypatch):
+    monkeypatch.delenv("AGENT_LANG", raising=False)
+    assert agent.main(["guide"]) == 0
+    assert "使用手册" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# v2#20 session --report
+# ---------------------------------------------------------------------------
+def test_session_report(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(agent, "HISTORY_FILE", str(tmp_path / "session_history.json"))
+    monkeypatch.setattr(agent, "RUN_LOGS", str(tmp_path))
+    agent._history_append({"at": "2026-10-01T10:00:00", "game": "florr", "rounds": 100, "deaths": 4})
+    agent._history_append({"at": "2026-10-02T10:00:00", "game": "florr", "rounds": 50, "deaths": 1})
+    agent._history_append({"at": "2026-10-02T11:00:00", "game": "demo_arcade", "rounds": 30, "deaths": 0})
+    out = agent.session_report()
+    assert "[florr] 2 局" in out and "150 回合 / 5 死亡" in out
+    assert "[demo_arcade] 1 局" in out
+    assert "[总计] 3 局" in out and "180 回合" in out
+    assert "最佳 100 回合" in out
+    assert agent.main(["session", "--report", "--save"]) == 0
+    assert (tmp_path / "session_report.md").exists()
+
+
+def test_session_report_empty(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent, "HISTORY_FILE", str(tmp_path / "nope.json"))
+    assert "暂无战绩历史" in agent.session_report()

@@ -2,6 +2,38 @@
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [3.2.0] - 2026-10-07
+
+一次性落地 [ROADMAP-v2.md](ROADMAP-v2.md) 全部 22 项。测试 116 → 150，新增 fuzz 属性测试与配置体检门禁。
+
+### 新增
+
+- **观测诊断四件套（v2#1-#4）**：`doctor` 环境体检（依赖/目录/档案/感知/密钥，✓⚠✗ 分级）；`bench` 分段耗时基准（防性能回退，落 bench 事件）；`logs --stats` 事件流聚合统计；panel `/healthz` 探针端点
+- **按游戏隔离状态（v2#5，P0）**：agent_state / session_history 升级 v2 容器 `{games:{...}}`，v0/v1 自动迁移；切游戏不再串场次与续玩进度；`session --all` 汇总
+- **长跑能力（v2#6）**：`run --hours N` 时长上限优雅收尾；每 30 回合落盘循环检查点，`run --resume` 恢复回合/死亡/套装现场；Ctrl+C/被杀保留检查点，正常收尾自动清除
+- **`brief` 开局侦察（v2#7）**：模式/档案概要+校验/知识库规模/战绩/调参一屏聚合
+- **`capture_region` 字符串简写（v2#8）**："x,y,w,h" 与 dict 双格式
+- **`kb boss --top N` 危险度排行（v2#9）**：遭遇数（行为日志）+ 致死数（复盘结构化字段）聚合排序
+- **`kb stats`（v2#10）**：分区文件数/体积/最大文件/修订与回滚计数/学习累计
+- **档案 extends 继承（v2#11）**：父底子盖深合并、列表整体替换、深度上限 4 防环，seed/mock/profile-check 全走生效配置
+- **`replay` 对局回放（v2#12）**：events.jsonl 重建时间线，死亡回合标 ☠
+- **pre-commit 全家桶（v2#13）**：ruff check/format、mypy（收紧为阻断）、分片一致性、密钥扫描五连钩子
+- **`config-check` 配置体检（v2#14）**：未知键 WARN / 类型 ERROR / 21 键安全区间 ERROR，进 CI；顺带清掉 config.yaml 四个 v2.0 死键、panel_port 收编 DEFAULT
+- **fuzz 属性测试（v2#15）**：固定种子 680+ 组随机脏数据（NaN/负值/错类型/字段缺失）灌预判-评估-决策全链，首跑即抓到 rarity/raw_id 非字符串崩溃真 bug（已修）
+- **dependabot（v2#16）**：pip + github-actions 周更，minor/patch 分组
+- **社区三件套（v2#17）**：CONTRIBUTING（双源工作流+质量门槛）、SECURITY（私密报告通道+威胁模型）、表单式 Issue 模板；README 修复 5 处 file:// 死链
+- **Release 加固（v2#18）**：产物附 SHA256SUMS；PyPI Trusted Publishing 发布骨架（手动触发）
+- **英文手册（v2#19）**：`guide --en` / `AGENT_LANG=en`
+- **`session --report`（v2#20）**：按游戏分组局数/回合/死亡率/最佳局 + 近 7 天趋势，`--save` 落盘
+- **常驻运行指南（v2#21）**：docs/windows-service.md（计划任务/NSSM/PowerShell 守护/systemd）
+- **Demo 走查（v2#22）**：docs/demo.md + tools/demo.sh 一键离线演示
+
+### 变更
+
+- CLI：`--game` 全局选项与子命令位置参数彻底解耦（dest=game_opt），profile-check/doctor/brief 的位置参数不再污染 AGENT_GAME
+- all_entities 历史不足分支补 `model: none` 字段，预判输出契约完备
+- GUIDE/README/architecture.md 全部命令与模块地图同步 v3.2
+
 ## [3.1.0] - 2026-10-07
 
 一次性落地 [ROADMAP.md](ROADMAP.md) 全部 26 项技术优化。测试 26 → 116，CI 覆盖率门槛 70%（实测 72%），mypy 0 error，ruff 全绿并阻断。
@@ -50,5 +82,6 @@
 - 原 16 个 MCP 工具能力全部保留为子命令/内部方法
 - 19 项端到端自检；Python 3.11/3.13 双版本 CI
 
+[3.2.0]: https://github.com/gupi-bill/Universal-Game-Framework/releases/tag/v3.2.0
 [3.1.0]: https://github.com/gupi-bill/Universal-Game-Framework/releases/tag/v3.1.0
 [3.0.0]: https://github.com/gupi-bill/Universal-Game-Framework/releases/tag/v3.0.0

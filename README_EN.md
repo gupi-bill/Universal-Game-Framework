@@ -109,7 +109,7 @@ Details: [docs/architecture.md](docs/architecture.md) (zh) · Add a new game: [d
 
 ## Engineering
 
-- **Tests**: 116 (unit + fault-injection + e2e), coverage floor 70% enforced in CI
+- **Tests**: 150+ (unit + fault-injection + fuzz + e2e), coverage floor 70% enforced in CI
 - **CI**: pytest on Python 3.11/3.13 · ruff check+format (blocking) · mypy (non-blocking, 0 errors) · profile-check · secret scan · Docker build smoke · zipapp e2e
 - **Distribution**: `pip install .` (console script `ugf`) · `dist/ugf.pyz` zipapp · multi-stage Docker image (non-root, healthcheck, compose)
 - **Runtime data**: knowledge base / logs / state live in `UGF_HOME` (default: repo dir, or `~/.ugf` when installed)

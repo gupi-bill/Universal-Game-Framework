@@ -35,6 +35,9 @@ python build.py split
 python build.py check-agent
 ```
 
+**顺序纪律**：改完代码先 `ruff format .` 再 `python build.py split`，最后跑测试——
+format 在 split 之后执行会让分片过期，check-agent 必红。
+
 分片按 agent.py 内的横幅注释（`# === N. 模块名 ===`）切分，拼接顺序即文件名排序，**不要手工改分片文件名**。
 
 ## 质量门槛（提交前全绿）
