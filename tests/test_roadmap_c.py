@@ -297,3 +297,124 @@ def test_predictor_update_still_tracks_normal_motion():
         p.update([{"raw_id": "hornet", "rarity": "Common", "x": 100 + i * 40, "y": 200}])
     preds = p.all_entities()
     assert len(preds) == 1 and preds[0]["raw_id"] == "hornet"
+
+
+# ---------------------------------------------------------------------------
+# #7 预判模型升级（线性 / 恒加速度 / 圆周 + auto）
+# ---------------------------------------------------------------------------
+import math  # noqa: E402
+
+
+def _mk_tracker(history):
+    tk = agent._Tracker("t", "Common", "monster")
+    tk.history = deque(history, maxlen=max(4, len(history)))
+    return tk
+
+
+def test_accel_model_beats_linear_on_accelerating():
+    """恒加速轨迹（x=500t²）：accel 模型的 1.2s 外推误差应远小于线性。"""
+    hist = [{"t": i * 0.1, "x": 500 * (i * 0.1) ** 2, "y": 0.0} for i in range(12)]
+    tk = _mk_tracker(hist)
+    lin = tk._fit_linear(1.2)
+    acc = tk._fit_accel(1.2)
+    assert acc is not None and acc["model"] == "accel"
+    truth = 500 * (hist[-1]["t"] + 1.2) ** 2
+    assert abs(acc["x"] - truth) < abs(lin["x"] - truth)
+    assert abs(acc["x"] - truth) < 50, f"accel 误差应很小，实际 {abs(acc['x'] - truth):.1f}"
+
+
+def test_circular_model_beats_linear_on_circle():
+    """圆周轨迹：circular 模型沿弧外推，误差应显著小于线性切线外推。"""
+    R, w = 150.0, 1.5
+    hist = [
+        {"t": i * 0.05, "x": 500 + R * math.cos(w * i * 0.05), "y": 500 + R * math.sin(w * i * 0.05)}
+        for i in range(40)
+    ]
+    tk = _mk_tracker(hist)
+    circ = tk._fit_circular(0.5)
+    lin = tk._fit_linear(0.5)
+    assert circ is not None and circ["model"] == "circular"
+    t_next = hist[-1]["t"] + 0.5
+    tx = 500 + R * math.cos(w * t_next)
+    ty = 500 + R * math.sin(w * t_next)
+    err_c = math.hypot(circ["x"] - tx, circ["y"] - ty)
+    err_l = math.hypot(lin["x"] - tx, lin["y"] - ty)
+    assert err_c < err_l, f"圆周误差 {err_c:.1f} 应小于线性 {err_l:.1f}"
+    assert err_c < 15, f"圆周模型误差应很小，实际 {err_c:.1f}"
+
+
+def test_circular_rejects_straight_line():
+    """直线轨迹不应被误判为圆周。"""
+    hist = [{"t": i * 0.1, "x": 100 + i * 30.0, "y": 50.0} for i in range(12)]
+    tk = _mk_tracker(hist)
+    assert tk._fit_circular(1.0) is None
+
+
+def test_predict_output_has_model_field():
+    hist = [{"t": i * 0.1, "x": 100 + i * 10.0, "y": 50.0} for i in range(8)]
+    tk = _mk_tracker(hist)
+    out = tk.predict()
+    assert out and out["model"] in ("linear", "accel", "circular")
+    for key in ("raw_id", "category", "threat_score", "confidence", "prediction_trusted"):
+        assert key in out
+
+
+def test_model_force_config(monkeypatch):
+    """predictor.model 强制指定时按指定模型输出。"""
+    monkeypatch.setattr(
+        agent,
+        "_CFG",
+        {
+            "predictor": {
+                "model": "linear",
+                "min_frames": 3,
+                "predict_seconds": 1.0,
+                "frame_full_frames": 8,
+                "speed_ref": 2000,
+                "speed_penalty_floor": 0.3,
+                "jitter_floor": 0.35,
+                "confidence_threshold": 0.0,
+                "threat": {},
+                "history_maxlen": 10,
+            }
+        },
+    )
+    hist = [{"t": i * 0.1, "x": 500 * (i * 0.1) ** 2, "y": 0.0} for i in range(12)]
+    tk = _mk_tracker(hist)
+    out = tk.predict()
+    assert out["model"] == "linear"
+
+
+def test_auto_selects_best_model_on_circle(monkeypatch):
+    """auto 模式在圆周轨迹上应选中 circular（回测残差最小）。"""
+    monkeypatch.setattr(
+        agent,
+        "_CFG",
+        {
+            "predictor": {
+                "model": "auto",
+                "min_frames": 3,
+                "predict_seconds": 0.5,
+                "frame_full_frames": 8,
+                "speed_ref": 2000,
+                "speed_penalty_floor": 0.3,
+                "jitter_floor": 0.35,
+                "confidence_threshold": 0.0,
+                "circular_min_frames": 8,
+                "circular_min_radius": 20,
+                "circular_min_omega": 0.3,
+                "accel_max": 2000,
+                "threat": {},
+                "history_maxlen": 40,
+            }
+        },
+    )
+    R, w = 150.0, 1.5
+    hist = [
+        {"t": i * 0.05, "x": 500 + R * math.cos(w * i * 0.05), "y": 500 + R * math.sin(w * i * 0.05)}
+        for i in range(20)
+    ]
+    tk = _mk_tracker(hist)
+    out = tk.predict()
+    assert out["model"] == "circular"
+    assert out["prediction_trusted"] is True, "圆周模型不应再被直线度惩罚压死"

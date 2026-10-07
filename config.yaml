@@ -35,6 +35,12 @@ predictor:
   speed_penalty_floor: 0.3     # 速度惩罚下限
   jitter_floor: 0.35           # 抖动惩罚下限（轨迹越绕，置信越低）
   match_max_dist: 400          # 实体匹配距离上限，超过宁开新轨不误挂（ROADMAP #9）
+  # ROADMAP #7：预判模型 auto=按一步回测残差自动选优；也可强制 linear/accel/circular
+  model: auto
+  accel_max: 2000              # 恒加速度模型的加速度钳制(px/s²)
+  circular_min_frames: 8       # 圆周检测最少帧数
+  circular_min_radius: 20      # 低于该半径不算绕圈(px)
+  circular_min_omega: 0.3      # 低于该角速度不算绕圈(rad/s)
   # 稀有度体系（Florr.io 原生，按游戏可换）
   rarity_highest_boss: ["Unique", "Eternal"]
   rarity_boss: ["Super"]
