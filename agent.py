@@ -306,6 +306,7 @@ DEFAULT = {
     "paths.frames": "video_frames",
     "paths.run_logs": "run_logs",
     "paths.backups": "kb_backups",
+    "kb.search_top_n": 5,  # ROADMAP #11：检索返回 Top-N
     "logs.retention_days": 7,
     "logs.max_size_mb": 20,
     # ROADMAP #8：LLM 决策（prompt 可由游戏档案覆盖；空=内置 SYSTEM_PROMPT）
@@ -467,6 +468,12 @@ def kb_game_dir(game: str = None) -> str:
 # ===========================================================================
 # 2. 知识库（Markdown）
 # ===========================================================================
+KB_HISTORY_DIRNAME = ".history"  # ROADMAP #12：写前快照存放目录（KB_DIR 内）
+
+# ROADMAP #11：检索排序时永远置顶的权威知识文件（决策闭环依赖它们，
+# 防止知识库被复盘/视频学习文件污染后，种子战术被 Top-N 挤出导致知识链断裂）
+CANONICAL_KB_FILES = {"tactics.md", "_current_tactic.md", "boss_guide.md"}
+
 KB_TEMPLATES = {
     "_README.md": (
         "# 本地知识库\n\n所有经验以 Markdown 存储，按游戏分区在 `knowledge_md/<游戏>/`。\n\n"
@@ -522,12 +529,58 @@ def kb_list(game: str = "") -> list:
     return sorted(f for f in os.listdir(base) if f.endswith(".md"))
 
 
+def _tokenize(text: str) -> list:
+    """BM25 轻量分词（ROADMAP #11）：ASCII 词 + 中文单字/二元组，零第三方依赖。"""
+    text = str(text or "").lower()
+    tokens = re.findall(r"[a-z0-9_]+", text)
+    cjk = re.findall(r"[\u4e00-\u9fff]", text)
+    tokens.extend(cjk)
+    tokens.extend(a + b for a, b in zip(cjk, cjk[1:], strict=False))
+    return tokens
+
+
+def _bm25_scores(query_tokens: list, docs_tokens: list, k1: float = 1.5, b: float = 0.75) -> list:
+    """经典 BM25 打分：docs_tokens 为每篇文档的 token 列表，返回每篇得分。"""
+    n = len(docs_tokens)
+    if not n or not query_tokens:
+        return [0.0] * n
+    avgdl = sum(len(d) for d in docs_tokens) / n or 1.0
+    df: dict = {}
+    for toks in docs_tokens:
+        for t in set(toks):
+            df[t] = df.get(t, 0) + 1
+    scores = []
+    for toks in docs_tokens:
+        tf: dict = {}
+        for t in toks:
+            tf[t] = tf.get(t, 0) + 1
+        s = 0.0
+        dl = len(toks) or 1
+        for q in set(query_tokens):
+            f = tf.get(q, 0)
+            if not f:
+                continue
+            idf = math.log(1 + (n - df.get(q, 0) + 0.5) / (df.get(q, 0) + 0.5))
+            s += idf * (f * (k1 + 1)) / (f + k1 * (1 - b + b * dl / avgdl))
+        scores.append(s)
+    return scores
+
+
 def _text_search(keyword: str, base: str) -> str:
+    """知识库检索（ROADMAP #11）：字面命中保底 + BM25 相关性排序，返回 Top-N。
+
+    排序规则：字面包含关键词的文档优先，其次按 BM25 得分降序；
+    两者都不沾边的文档不返回。输出格式与旧版保持兼容（"共找到 N 条结果:"）。
+    """
     if not os.path.isdir(base):
         return "未找到相关内容"
-    kw = str(keyword or "").lower()
-    hits = []
+    kw = str(keyword or "").strip().lower()
+    if not kw:
+        return "未找到相关内容"
+    docs = []  # (relpath, content, literal_hit)
     for root, _dirs, files in os.walk(base):
+        if KB_HISTORY_DIRNAME in root.split(os.sep):
+            continue
         for fn in sorted(f for f in files if f.endswith(".md")):
             fp = os.path.join(root, fn)
             try:
@@ -535,8 +588,28 @@ def _text_search(keyword: str, base: str) -> str:
                     content = f.read()
             except OSError:
                 continue
-            if kw in content.lower():
-                hits.append(f"## {os.path.relpath(fp, base)}\n{content[:2000]}")
+            docs.append((os.path.relpath(fp, base), content, kw in content.lower()))
+    if not docs:
+        return "未找到相关内容"
+    scores = _bm25_scores(_tokenize(kw), [_tokenize(c) for _r, c, _h in docs])
+    top_n = max(1, safe_int(cfg_get("kb.search_top_n", 5), 5))
+
+    def _tier(i: int) -> int:
+        name = docs[i][0].replace(os.sep, "/").split("/")[-1]
+        if docs[i][2] and name in CANONICAL_KB_FILES:
+            return 2  # 权威战术文档且字面命中：永远置顶
+        return 1 if docs[i][2] else 0
+
+    ranked = sorted(range(len(docs)), key=lambda i: (_tier(i), scores[i]), reverse=True)
+    hits = []
+    for i in ranked:
+        rel, content, literal = docs[i]
+        if not literal and scores[i] <= 0:
+            continue
+        if len(hits) >= top_n:
+            break
+        tag = "" if literal else f"（相关度 {scores[i]:.2f}）"
+        hits.append(f"## {rel}{tag}\n{content[:2000]}")
     if not hits:
         return "未找到相关内容"
     return f"共找到 {len(hits)} 条结果:\n" + "\n\n---\n\n".join(hits)

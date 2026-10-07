@@ -78,6 +78,9 @@ paths:
   frames: video_frames         # 视频抽帧临时目录
   run_logs: run_logs           # 运行日志目录
 
+kb:
+  search_top_n: 5              # 检索返回 Top-N（ROADMAP #11：BM25 排序）
+
 logs:
   retention_days: 7            # 日志保留天数，超期删除
   max_size_mb: 20              # 单个日志文件超过该大小 gzip 轮转（ROADMAP #16）
