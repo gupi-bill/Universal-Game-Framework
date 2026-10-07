@@ -6,6 +6,12 @@
 
 看画面 → 预判 → 评估 → 出动作 → 查/写经验 → 复盘 → 汇报 → 学习，全在一个 `agent.py` 里。
 
+[![CI](https://github.com/gupi-bill/Universal-Game-Framework/actions/workflows/ci.yml/badge.svg)](https://github.com/gupi-bill/Universal-Game-Framework/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org)
+[![Coverage](https://img.shields.io/badge/coverage-72%25-green)](.github/workflows/ci.yml)
+[![mypy](https://img.shields.io/badge/mypy-0%20errors-brightgreen)](pyproject.toml)
+[![License](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
+
 > ⚠️ **声明**：仅用于本地 AI 智能体技术研究。在 florr.io 官方服务器运行 bot 违反游戏服务条款，可能导致账号封禁。请在本地 / 自建 / 已授权环境使用。
 
 </div>
@@ -140,18 +146,36 @@ CI（[.github/workflows/ci.yml](file:///workspace/Universal-Game-Framework/.gith
 
 ---
 
+## 文档
+
+| 文档 | 内容 |
+|---|---|
+| [docs/architecture.md](docs/architecture.md) | 分层架构、数据流、模块地图、配置优先级、可靠性设计 |
+| [docs/game-profile-guide.md](docs/game-profile-guide.md) | 30 分钟接入一款新游戏（含常见错误速查） |
+| [docs/faq.md](docs/faq.md) | 安装 / 感知 / 知识库 / 排障 / 合规常见问题 |
+| [ROADMAP.md](ROADMAP.md) | 技术优化路线图（26 项，v3.1.0 已全部落地） |
+| [CHANGELOG.md](CHANGELOG.md) | 版本变更记录 |
+
+---
+
 ## 目录结构
 
 ```
 Universal-Game-Framework/
 ├── agent.py              # 全部能力都在这里（单文件 Agent）
-├── config.yaml           # 全局配置（阈值 / 路径，可热加载）
+├── config.yaml           # 全局配置（阈值 / 路径 / 降级链，可热加载）
 ├── game_profiles/        # 游戏档案：florr / demo_arcade / space_invaders
-├── tests/                # 精简测试
-├── ROADMAP.md            # 优化路线图（26 项技术优化清单）
+├── docs/                 # 架构 / 新游戏接入指南 / FAQ
+├── tests/                # 116 项测试（含故障注入）
+├── tools/secret_scan.py  # 密钥防泄漏扫描（pre-commit + CI）
+├── build.py              # zipapp 构建（dist/ugf.pyz）
+├── ROADMAP.md            # 优化路线图（26 项）
+├── CHANGELOG.md          # 版本变更记录
 ├── requirements.txt      # 依赖（核心只有 pyyaml + requests）
-├── pyproject.toml
-├── Dockerfile
+├── pyproject.toml        # pip install . 后可用 ugf 命令
+├── Dockerfile            # 多阶段构建 + 非 root + 健康检查
+├── docker-compose.yml    # 容器编排示例
+├── start.bat / start.ps1 # Windows 一键启动
 └── README.md
 ```
 

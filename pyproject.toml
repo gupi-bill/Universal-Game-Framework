@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "universal-game-framework"
-version = "3.0.0"
+version = "3.1.0"
 description = "单文件游戏 Agent：自己看画面、预判、决策、动作、复盘、学习"
 readme = "README.md"
 requires-python = ">=3.10"
