@@ -211,3 +211,26 @@ def test_core_types_exist_and_annotated():
     assert "CombatEval" in str(hints["return"])
     hints = typing.get_type_hints(agent.llm_decide)
     assert "ActionDict" in str(hints["return"])
+
+
+# ---------------------------------------------------------------------------
+# #24 密钥防泄漏扫描
+# ---------------------------------------------------------------------------
+def test_secret_scan_repo_clean():
+    import subprocess
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    scanner = os.path.join(root, "tools", "secret_scan.py")
+    r = subprocess.run([sys.executable, scanner], capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, f"仓库自扫必须干净: {r.stdout}"
+
+
+def test_secret_scan_detects_fake_token(tmp_path):
+    import subprocess
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    scanner = os.path.join(root, "tools", "secret_scan.py")
+    leak = tmp_path / "leak.py"
+    leak.write_text('TOKEN = "gh' + "p_" + "A" * 36 + '"\n', encoding="utf-8")
+    r = subprocess.run([sys.executable, scanner, str(leak)], capture_output=True, text=True, timeout=60)
+    assert r.returncode == 1 and "GitHub Token" in r.stdout
