@@ -110,3 +110,46 @@ def test_kb_history_cli(tmp_path, monkeypatch, capsys):
     assert agent.main(["--game", "g4", "kb", "history", "t4"]) == 0
     out = capsys.readouterr().out
     assert "历史修订" in out
+
+
+# ---------------------------------------------------------------------------
+# #13 调参审计与人工锁定
+# ---------------------------------------------------------------------------
+_FAST_TUNE_CFG = {
+    "agent": {"tune_locked": [], "report_every": 0},
+    "combat": {"retreat_ratio": 1.0},
+    "predictor": {"confidence_threshold": 0.65},
+}
+
+
+def test_tune_audit_trail(tmp_path, monkeypatch):
+    """每次变更都留审计：旧值 → 新值 → 依据。"""
+    monkeypatch.setattr(agent, "TUNED_PATH", str(tmp_path / "tuned.yaml"))
+    monkeypatch.setattr(agent, "_CFG", dict(_FAST_TUNE_CFG))
+    agent.auto_tuner_reset()
+    msg = agent.auto_tune(hits=0, attempts=10, deaths_extra=2)
+    assert "retreat_ratio" in msg
+    o = agent._read_yaml(agent.TUNED_PATH)
+    audit = o.get("_audit") or []
+    assert audit, "应留下审计记录"
+    a = audit[0]
+    assert a["param"] == "combat.retreat_ratio"
+    assert a["old"] == 1.0 and a["new"] == 0.8 and "死亡" in a["reason"]
+    assert "审计" in agent.auto_tuner_status()
+
+
+def test_tune_lock_skips_param(tmp_path, monkeypatch):
+    """锁定参数不被调参覆盖，且返回信息留痕。"""
+    cfg = dict(_FAST_TUNE_CFG)
+    cfg["agent"] = {"tune_locked": ["combat.retreat_ratio"]}
+    monkeypatch.setattr(agent, "TUNED_PATH", str(tmp_path / "tuned.yaml"))
+    monkeypatch.setattr(agent, "_CFG", cfg)
+    agent.auto_tuner_reset()
+    msg = agent.auto_tune(hits=1, attempts=10, deaths_extra=1)
+    assert "锁定" in msg
+    o = agent._read_yaml(agent.TUNED_PATH)
+    assert (o.get("combat") or {}).get("retreat_ratio") is None, "锁定参数不得被写入"
+    # 未锁定的 confidence 照常调整并留审计
+    assert (o.get("predictor") or {}).get("confidence_threshold") is not None
+    assert any(a["param"] == "predictor.confidence_threshold" for a in (o.get("_audit") or []))
+    assert "人工锁定" in agent.auto_tuner_status()
