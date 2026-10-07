@@ -951,8 +951,10 @@ def kb_boss_ranking(top: int = 5, game: str = "") -> str:
         return f"（{g}）暂无 BOSS 遭遇记录——打几局带 BOSS 的对局后再来看排行"
     rows = sorted(names, key=lambda n: (deaths.get(n, 0), encounters.get(n, 0)), reverse=True)
     n_top = max(1, safe_int(top, 5))
-    lines = [f"== BOSS 危险度排行（{g} · Top {min(n_top, len(rows))} / 共 {len(rows)} 种）==",
-             f"{'实体':<30}{'遭遇':>6}{'致死':>6}"]
+    lines = [
+        f"== BOSS 危险度排行（{g} · Top {min(n_top, len(rows))} / 共 {len(rows)} 种）==",
+        f"{'实体':<30}{'遭遇':>6}{'致死':>6}",
+    ]
     for n in rows[:n_top]:
         lines.append(f"{n:<30}{encounters.get(n, 0):>6}{deaths.get(n, 0):>6}")
     return "\n".join(lines)
@@ -962,7 +964,8 @@ def kb_stats(game: str = "", all_games: bool = False) -> str:
     """ROADMAP v2 #10：知识库规模与变动统计（文件/体积/最大文件/修订/回滚/学习）。"""
     if all_games and os.path.isdir(KB_DIR):
         games = [
-            d for d in sorted(os.listdir(KB_DIR))
+            d
+            for d in sorted(os.listdir(KB_DIR))
             if os.path.isdir(os.path.join(KB_DIR, d)) and d != KB_HISTORY_DIRNAME
         ] or ["default"]
     else:
@@ -976,10 +979,8 @@ def kb_stats(game: str = "", all_games: bool = False) -> str:
         files = [f for f in os.listdir(d) if f.endswith(".md")]
         sizes = []
         for f in files:
-            try:
+            with contextlib.suppress(OSError):
                 sizes.append((os.path.getsize(os.path.join(d, f)), f))
-            except OSError:
-                pass
         sizes.sort(reverse=True)
         n_hist = n_roll = 0
         hist_dir = os.path.join(KB_DIR, KB_HISTORY_DIRNAME)
@@ -989,8 +990,8 @@ def kb_stats(game: str = "", all_games: bool = False) -> str:
                 if not hf.endswith(".jsonl") or not hf.startswith(prefix):
                     continue
                 try:
-                    with open(os.path.join(hist_dir, hf), encoding="utf-8") as f:
-                        for line in f:
+                    with open(os.path.join(hist_dir, hf), encoding="utf-8") as fh:
+                        for line in fh:
                             if not line.strip():
                                 continue
                             n_hist += 1
@@ -998,15 +999,21 @@ def kb_stats(game: str = "", all_games: bool = False) -> str:
                                 n_roll += 1
                 except OSError:
                     pass
-        lines.append(f"[{g}] {len(files)} 篇 / {_dir_mb(d):.3f} MB ｜ 历史修订 {n_hist} 条（含回滚快照 {n_roll}）")
+        lines.append(
+            f"[{g}] {len(files)} 篇 / {_dir_mb(d):.3f} MB ｜ 历史修订 {n_hist} 条（含回滚快照 {n_roll}）"
+        )
         for size, fn in sizes[:5]:
             lines.append(f"    {size / 1024:8.1f} KB  {fn}")
     archive_mb = _dir_mb(ARCHIVE_DIR) if os.path.isdir(ARCHIVE_DIR) else 0.0
-    lines.append(f"[归档] {archive_mb:.3f} MB ｜ [知识库合计] {_dir_mb(KB_DIR) if os.path.isdir(KB_DIR) else 0.0:.3f} MB")
+    lines.append(
+        f"[归档] {archive_mb:.3f} MB ｜ [知识库合计] {_dir_mb(KB_DIR) if os.path.isdir(KB_DIR) else 0.0:.3f} MB"
+    )
     learns = read_events(10**9, "learn")
     if learns:
         kept_total = sum(safe_int(e.get("kept")) for e in learns)
-        lines.append(f"[学习] 视频学习 {len(learns)} 次 / 累计入库 {kept_total} 条 / 最近 {learns[-1].get('ts')}")
+        lines.append(
+            f"[学习] 视频学习 {len(learns)} 次 / 累计入库 {kept_total} 条 / 最近 {learns[-1].get('ts')}"
+        )
     return "\n".join(lines)
 
 

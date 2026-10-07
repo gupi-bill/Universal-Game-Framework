@@ -236,10 +236,12 @@ def test_boss_ranking(tmp_path, monkeypatch):
         "- 10:00:01 mantis(Super) 位置(1,2) 预判(3,4) 决策=fight\n"
         "- 10:00:02 mantis(Super) 位置(1,2) 预判(3,4) 决策=fight\n"
         "- 10:00:03 hornet(Common) 位置(1,2) 预判(3,4) 决策=fight\n",
-        encoding="utf-8")
+        encoding="utf-8",
+    )
     (gdir / "review_20260101_000000.md").write_text(
         "# 复盘\n## 结构化字段\n- outcome: 死亡\n- killer_entities: mantis(Super)\n- set: combat\n",
-        encoding="utf-8")
+        encoding="utf-8",
+    )
     out = agent.kb_boss_ranking(5, g)
     assert "mantis(Super)" in out
     lines = [ln for ln in out.splitlines() if "mantis" in ln or "hornet" in ln]
@@ -254,7 +256,7 @@ def test_kb_stats(tmp_path, monkeypatch):
     monkeypatch.setattr(agent, "KB_DIR", str(tmp_path))
     monkeypatch.setattr(agent, "ARCHIVE_DIR", str(tmp_path / "_arch"))
     agent.kb_write("t1", "内容一" * 50, "sgame")
-    agent.kb_write("t1", "内容二" * 50, "sgame")   # 产生 1 条历史修订
+    agent.kb_write("t1", "内容二" * 50, "sgame")  # 产生 1 条历史修订
     out = agent.kb_stats("sgame")
     assert "[sgame]" in out and "1 篇" in out
     assert "历史修订 1" in out
@@ -298,7 +300,8 @@ def test_profile_extends_inheritance(tmp_path, monkeypatch):
         "extends: parent_game\n"
         "game:\n  name: child_game\n  description: 子档案\n"
         "combat:\n  tactics:\n    - 子战术：集火\n",
-        encoding="utf-8")
+        encoding="utf-8",
+    )
     merged = agent._load_profile_chain("child_game")
     # 子覆盖：name/tactics；父保留：threat/rarity/sets
     assert merged["game"]["name"] == "child_game"
@@ -312,7 +315,7 @@ def test_profile_extends_cycle_safe(tmp_path, monkeypatch):
     monkeypatch.setattr(agent, "PROFILE_DIR", str(tmp_path))
     (tmp_path / "a.yaml").write_text("extends: b\ngame:\n  name: a\n", encoding="utf-8")
     (tmp_path / "b.yaml").write_text("extends: a\ngame:\n  name: b\n", encoding="utf-8")
-    merged = agent._load_profile_chain("a")   # 不得死循环
+    merged = agent._load_profile_chain("a")  # 不得死循环
     assert isinstance(merged, dict)
 
 
@@ -320,7 +323,8 @@ def test_profile_extends_missing_parent_flagged(tmp_path, monkeypatch):
     pytest.importorskip("yaml")
     monkeypatch.setattr(agent, "PROFILE_DIR", str(tmp_path))
     (tmp_path / "orphan.yaml").write_text(
-        "extends: no_such_parent\ngame:\n  name: orphan\n", encoding="utf-8")
+        "extends: no_such_parent\ngame:\n  name: orphan\n", encoding="utf-8"
+    )
     issues = agent.profile_check_one("orphan")
     assert any(i[1] == "extends" and "不存在" in i[2] for i in issues)
 
@@ -330,13 +334,12 @@ def test_profile_extends_missing_parent_flagged(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 def test_replay_timeline(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(agent, "RUN_LOGS", str(tmp_path))
-    agent.log_event("decision", round=1, action="attack", source="rule",
-                    decision="fight", mindset="balanced")
+    agent.log_event("decision", round=1, action="attack", source="rule", decision="fight", mindset="balanced")
     agent.log_event("death", round=2, deaths=1)
-    agent.log_event("decision", round=3, action="defend", source="kb",
-                    decision="cautious_fight", mindset="conservative")
+    agent.log_event(
+        "decision", round=3, action="defend", source="kb", decision="cautious_fight", mindset="conservative"
+    )
     agent.log_event("session_end", rounds=3, deaths=1, elapsed=1.5)
     out = agent.replay()
     assert "对局回放" in out and "R1" in out and "☠" in out and "🏁" in out
     assert agent.main(["replay", "--tail", "2"]) == 0
-    assert "暂无事件" in agent.replay.__doc__ or True
