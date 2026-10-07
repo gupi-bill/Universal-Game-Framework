@@ -3559,9 +3559,7 @@ def _validate_action(obj) -> tuple[ActionDict | None, str]:
     return out, ""
 
 
-def llm_decide(
-    state: FramePayload, predictions: list, combat_eval: dict, kb_text: str
-) -> ActionDict:
+def llm_decide(state: FramePayload, predictions: list, combat_eval: dict, kb_text: str) -> ActionDict:
     """LLM 决策（ROADMAP #5/#8）：传输层重试 + schema 校验 + 一次修复重试 + 规则兜底。
 
     - prompt 可被游戏档案 llm.system_prompt 覆盖
@@ -3643,9 +3641,7 @@ def llm_decide(
     return fallback_decide(state, combat_eval, kb_text)
 
 
-def fallback_decide(
-    state: FramePayload, combat_eval: dict, kb_text: str = ""
-) -> ActionDict:
+def fallback_decide(state: FramePayload, combat_eval: dict, kb_text: str = "") -> ActionDict:
     """无 LLM 时的规则兜底 —— 命中知识会真正改变动作（闭环最后一段）。"""
     if state.get("afk_popup"):
         return {"action": "idle", "source": "rule"}
@@ -3677,9 +3673,7 @@ def fallback_decide(
 LEARNING_STATS = LearningStats()
 
 
-def _autopilot_action(
-    state: FramePayload, predictions: list, ev: dict, kb_text: str
-) -> ActionDict:
+def _autopilot_action(state: FramePayload, predictions: list, ev: dict, kb_text: str) -> ActionDict:
     """选动作：优先让 LLM 决策，没密钥就走规则。"""
     return llm_decide(state, predictions, ev, kb_text)
 
@@ -3996,9 +3990,7 @@ def profile_check_one(game: str) -> list:
     port = (prof.get("server") or {}).get("perception_port")
     if port is None:
         _pc_issue(issues, "WARN", "server.perception_port", "缺失，将回落 config.yaml 默认端口")
-    elif not isinstance(port, int) or isinstance(port, bool):
-        _pc_issue(issues, "ERROR", "server.perception_port", f"必须为 1024~65535 的整数，当前: {port!r}")
-    elif not 1024 <= port <= 65535:
+    elif not isinstance(port, int) or isinstance(port, bool) or not 1024 <= int(port) <= 65535:
         _pc_issue(issues, "ERROR", "server.perception_port", f"必须为 1024~65535 的整数，当前: {port!r}")
 
     # 三、稀有度档位与威胁金字塔
@@ -4053,11 +4045,7 @@ def profile_check_one(game: str) -> list:
     # 四、战斗配置
     combat = prof.get("combat") or {}
     sets_raw = combat.get("sets")
-    if (
-        isinstance(sets_raw, list)
-        and sets_raw
-        and all(isinstance(x, str) and x.strip() for x in sets_raw)
-    ):
+    if isinstance(sets_raw, list) and sets_raw and all(isinstance(x, str) and x.strip() for x in sets_raw):
         sets = [str(x).strip().lower() for x in sets_raw]
     else:
         _pc_issue(issues, "ERROR", "combat.sets", "必须为非空字符串列表（游戏内真实套装名）")
