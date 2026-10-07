@@ -21,7 +21,8 @@ GUIDE = """# Universal-Game-Framework · 单文件游戏 Agent 使用手册
     action   执行一个动作：action move --x 100 --y 200 / action attack
     set      切套装：set retreat
     afk      查看 AFK 弹窗处理指引
-    kb       知识库：list / search / write / append / export / import / boss / tactic / clean
+    kb       知识库：list / search / write / append / export / import / boss(--top N 排行) /
+             tactic / clean / history / rollback / maintain / stats
     learn    视频学习：learn video.mp4 或 learn --url <链接> --frames 5
     report   生成一份对局报告（写 run_logs/，可选 Webhook）
     doctor   环境体检：依赖/目录/档案/感知/密钥，✓⚠✗ 清单（致命项退出码 1）
@@ -30,6 +31,7 @@ GUIDE = """# Universal-Game-Framework · 单文件游戏 Agent 使用手册
     logs     查看运行日志：--tail N / --grep KW / --events --kind decision / --stats
     session  看会话记忆与历史战绩（--all 全部游戏汇总）
     brief    开局侦察报告：档案/知识库/战绩/调参一屏聚合
+    replay   对局回放：事件时间线（--tail N 只看最后 N 条）
     tune     自动调参：tune --status / tune --reset
     selftest 离线自检：不碰键鼠、不用密钥，跑通全链路并断言关键产物
 
@@ -77,7 +79,12 @@ def _cli_kb(args) -> int:
     elif sub == "import":
         print(kb_import(args.backup))
     elif sub == "boss":
-        print(kb_query_boss(args.name or ""))
+        if safe_int(getattr(args, "top", 0)) > 0:
+            print(kb_boss_ranking(args.top, game))
+        else:
+            print(kb_query_boss(args.name or ""))
+    elif sub == "stats":
+        print(kb_stats(game, args.all))
     elif sub == "tactic":
         print(kb_switch_tactic(args.filename))
     elif sub == "clean":
@@ -229,6 +236,7 @@ def build_parser() -> argparse.ArgumentParser:
     k.add_argument("backup")
     k = kbsub.add_parser("boss")
     k.add_argument("name", nargs="?", default="")
+    k.add_argument("--top", type=int, default=0, help="危险度排行 Top N（ROADMAP v2 #9）")
     k = kbsub.add_parser("tactic")
     k.add_argument("filename")
     k = kbsub.add_parser("clean")
@@ -238,6 +246,8 @@ def build_parser() -> argparse.ArgumentParser:
     k = kbsub.add_parser("rollback")
     k.add_argument("filename")
     k.add_argument("--rev", type=int, default=1)
+    k = kbsub.add_parser("stats")
+    k.add_argument("--all", action="store_true", help="全部游戏分区")
     for p in (kbsub.choices["list"], kbsub.choices["export"], kbsub.choices["maintain"]):
         p.add_argument("--all", action="store_true")
 
@@ -280,6 +290,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("brief", help="开局侦察报告（档案/知识库/战绩/调参一屏）")
     sp.add_argument("game", nargs="?", default="", help="指定游戏（缺省=当前）")
+
+    sp = sub.add_parser("replay", help="对局回放：事件时间线（ROADMAP v2 #12）")
+    sp.add_argument("--tail", type=int, default=0, help="只看最后 N 条事件")
     return ap
 
 
@@ -339,6 +352,8 @@ def main(argv=None) -> int:
         print(session_summary(all_games=args.all))
     elif cmd == "brief":
         return brief(args.game)
+    elif cmd == "replay":
+        print(replay(args.tail))
     elif cmd == "tune":
         if args.reset:
             print(auto_tuner_reset())

@@ -165,12 +165,38 @@ def active_game() -> str:
     return str((_CFG.get("agent") or {}).get("game") or (_CFG.get("game") or {}).get("name") or "florr")
 
 
+def _load_profile_chain(game: str, depth: int = 0) -> dict:
+    """读取游戏档案，支持 extends 继承（ROADMAP v2 #11）。
+
+    - 子档案 extends: <父档案名> → 先加载父，再用子深合并覆盖
+    - 列表整体替换不拼接（避免稀有度档/套装语义歧义）
+    - 递归深度上限 4：环继承（a→b→a）自动截断并留日志
+    """
+    g = safe_name(game)
+    prof = _read_yaml(os.path.join(PROFILE_DIR, f"{g}.yaml"))
+    if not isinstance(prof, dict) or not prof:
+        return {}
+    parent = safe_name(str(prof.get("extends") or ""))
+    if parent:
+        if depth >= 4:
+            log(f"[配置] 档案 {g} 继承深度超限(4)，疑似环继承，已截断")
+        elif parent == g:
+            log(f"[配置] 档案 {g} extends 自身，已忽略")
+        else:
+            base = _load_profile_chain(parent, depth + 1)
+            if base:
+                child = {k: v for k, v in prof.items() if k != "extends"}
+                _merge(base, child)
+                return base
+    return prof
+
+
 def reload_config() -> None:
-    """按优先级合并：DEFAULT < config.yaml < 游戏档案 < tuned_overrides。"""
+    """按优先级合并：DEFAULT < config.yaml < 游戏档案(含 extends 继承) < tuned_overrides。"""
     tree = _flatten_default()
     _merge(tree, _read_yaml(CONFIG_PATH))
     game = active_game_for(tree)
-    _merge(tree, _read_yaml(os.path.join(PROFILE_DIR, f"{game}.yaml")))
+    _merge(tree, _load_profile_chain(game))
     _merge(tree, _read_yaml(TUNED_PATH))
     global _CFG
     _CFG = tree

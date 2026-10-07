@@ -22,9 +22,12 @@ def profile_check_one(game: str) -> list:
     path = os.path.join(PROFILE_DIR, f"{g}.yaml")
     if not os.path.exists(path):
         return [("ERROR", "file", f"档案不存在: game_profiles/{g}.yaml")]
-    prof = _read_yaml(path)
-    if not prof:
+    if not _read_yaml(path):
         return [("ERROR", "file", f"档案无法解析为 YAML 字典: {g}.yaml（或缺少 pyyaml）")]
+    prof = _load_profile_chain(g)  # 校验合并后的生效配置（ROADMAP v2 #11）
+    parent = safe_name(str(prof.get("extends") or str((_read_yaml(path) or {}).get("extends") or "")))
+    if parent and not os.path.exists(os.path.join(PROFILE_DIR, f"{parent}.yaml")):
+        _pc_issue(issues, "ERROR", "extends", f"父档案不存在: {parent}.yaml")
 
     # 一、游戏元信息
     name = str((prof.get("game") or {}).get("name") or "").strip()

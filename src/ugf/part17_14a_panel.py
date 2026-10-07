@@ -425,3 +425,42 @@ def event_stats(kind: str = "") -> str:
     return "\n".join(lines)
 
 
+def replay(tail: int = 0) -> str:
+    """ROADMAP v2 #12：基于 events.jsonl 的对局回放（文本时间线）。
+
+    默认取「上一个 session_end 之后」的最近一局窗口；死亡回合前后标注 ☠。
+    """
+    evs = read_events(10**9)
+    if not evs:
+        return "暂无事件记录（先跑一局：python agent.py run --dry-run --rounds 20）"
+    ends = [i for i, e in enumerate(evs) if e.get("kind") == "session_end"]
+    start = ends[-2] + 1 if len(ends) >= 2 else 0
+    window = evs[start:]
+    if safe_int(tail) > 0:
+        window = window[-safe_int(tail) :]
+    death_rounds = {safe_int(e.get("round")) for e in window if e.get("kind") == "death"}
+    lines = [f"== 对局回放（最近一局 · 事件 {len(window)} 条）=="]
+    for e in window:
+        kind = e.get("kind")
+        ts = str(e.get("ts", ""))[-8:]
+        if kind == "decision":
+            r = safe_int(e.get("round"))
+            near_death = any((r + d) in death_rounds for d in (-1, 0, 1))
+            mark = "☠" if near_death else " "
+            lines.append(
+                f"{mark} {ts} R{r:<5} {str(e.get('action', '?')):<9} "
+                f"来源={str(e.get('source') or '?'):<7} 决策={e.get('decision', '?')} 心态={e.get('mindset', '?')}"
+            )
+        elif kind == "death":
+            lines.append(f"☠ {ts} R{safe_int(e.get('round'))} 死亡（累计 {safe_int(e.get('deaths'))}）")
+        elif kind == "tune":
+            lines.append(f"⚙ {ts} {e.get('detail', '')}")
+        elif kind == "learn":
+            lines.append(f"📚 {ts} 视频学习：{e.get('frames')} 帧 → 入库 {e.get('kept')} 条")
+        elif kind == "session_end":
+            lines.append(
+                f"🏁 {ts} 收局：回合={e.get('rounds')} 死亡={e.get('deaths')} 耗时={e.get('elapsed')}s"
+            )
+    return "\n".join(lines)
+
+

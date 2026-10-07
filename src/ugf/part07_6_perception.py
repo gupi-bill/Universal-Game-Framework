@@ -157,7 +157,7 @@ class Perception:
         self._mock = self._load_mock()
 
     def _load_mock(self) -> dict:
-        prof = _read_yaml(os.path.join(PROFILE_DIR, f"{safe_name(active_game())}.yaml"))
+        prof = _load_profile_chain(safe_name(active_game()))
         m = (prof.get("perception") or {}).get("mock") or {}
         if not m:
             m = {

@@ -201,7 +201,7 @@ def _with_condition(tactic: str) -> str:
 def seed_knowledge(game: str | None = None, force: bool = False) -> list:
     """按游戏档案补种 seed 知识到 knowledge_md/<game>/（已存在则不覆盖）。"""
     g = safe_name(game or active_game()) or "default"
-    prof = _read_yaml(os.path.join(PROFILE_DIR, f"{g}.yaml"))
+    prof = _load_profile_chain(g)
     combat = prof.get("combat") or {}
     pred = prof.get("predictor") or {}
     tactics = [str(t) for t in (combat.get("tactics") or []) if str(t).strip()]

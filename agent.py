@@ -488,12 +488,38 @@ def active_game() -> str:
     return str((_CFG.get("agent") or {}).get("game") or (_CFG.get("game") or {}).get("name") or "florr")
 
 
+def _load_profile_chain(game: str, depth: int = 0) -> dict:
+    """读取游戏档案，支持 extends 继承（ROADMAP v2 #11）。
+
+    - 子档案 extends: <父档案名> → 先加载父，再用子深合并覆盖
+    - 列表整体替换不拼接（避免稀有度档/套装语义歧义）
+    - 递归深度上限 4：环继承（a→b→a）自动截断并留日志
+    """
+    g = safe_name(game)
+    prof = _read_yaml(os.path.join(PROFILE_DIR, f"{g}.yaml"))
+    if not isinstance(prof, dict) or not prof:
+        return {}
+    parent = safe_name(str(prof.get("extends") or ""))
+    if parent:
+        if depth >= 4:
+            log(f"[配置] 档案 {g} 继承深度超限(4)，疑似环继承，已截断")
+        elif parent == g:
+            log(f"[配置] 档案 {g} extends 自身，已忽略")
+        else:
+            base = _load_profile_chain(parent, depth + 1)
+            if base:
+                child = {k: v for k, v in prof.items() if k != "extends"}
+                _merge(base, child)
+                return base
+    return prof
+
+
 def reload_config() -> None:
-    """按优先级合并：DEFAULT < config.yaml < 游戏档案 < tuned_overrides。"""
+    """按优先级合并：DEFAULT < config.yaml < 游戏档案(含 extends 继承) < tuned_overrides。"""
     tree = _flatten_default()
     _merge(tree, _read_yaml(CONFIG_PATH))
     game = active_game_for(tree)
-    _merge(tree, _read_yaml(os.path.join(PROFILE_DIR, f"{game}.yaml")))
+    _merge(tree, _load_profile_chain(game))
     _merge(tree, _read_yaml(TUNED_PATH))
     global _CFG
     _CFG = tree
@@ -883,6 +909,105 @@ def kb_query_boss(boss_name: str = "") -> str:
         if hits
         else f"知识库中没有关于「{boss_name}」的 BOSS 行为记录。"
     )
+
+
+def kb_boss_ranking(top: int = 5, game: str = "") -> str:
+    """ROADMAP v2 #9：BOSS 危险度排行——遭遇次数（行为日志）+ 致死次数（复盘结构化字段）。"""
+    from collections import Counter
+
+    g = safe_name(game or active_game()) or "default"
+    encounters: Counter = Counter()
+    log_path = kb_resolve("boss_behavior_log", g)
+    if log_path and os.path.exists(log_path):
+        try:
+            with open(log_path, encoding="utf-8") as f:
+                for line in f:
+                    m = re.match(r"^- (\d{2}:\d{2}:\d{2}) (.+?) 位置", line.strip())
+                    if m:
+                        encounters[m.group(2)] += 1
+        except (OSError, UnicodeDecodeError):
+            pass
+    deaths: Counter = Counter()
+    d = kb_game_dir(g)
+    if os.path.isdir(d):
+        for fn in sorted(os.listdir(d)):
+            if not (fn.startswith("review_") and fn.endswith(".md")):
+                continue
+            try:
+                with open(os.path.join(d, fn), encoding="utf-8") as f:
+                    content = f.read()
+            except (OSError, UnicodeDecodeError):
+                continue
+            if "- outcome: 死亡" not in content:
+                continue
+            m = re.search(r"- killer_entities: (.+)", content)
+            if m:
+                for ent in m.group(1).split("、"):
+                    ent = ent.strip()
+                    if ent and ent != "未知":
+                        deaths[ent] += 1
+    names = set(encounters) | set(deaths)
+    if not names:
+        return f"（{g}）暂无 BOSS 遭遇记录——打几局带 BOSS 的对局后再来看排行"
+    rows = sorted(names, key=lambda n: (deaths.get(n, 0), encounters.get(n, 0)), reverse=True)
+    n_top = max(1, safe_int(top, 5))
+    lines = [f"== BOSS 危险度排行（{g} · Top {min(n_top, len(rows))} / 共 {len(rows)} 种）==",
+             f"{'实体':<30}{'遭遇':>6}{'致死':>6}"]
+    for n in rows[:n_top]:
+        lines.append(f"{n:<30}{encounters.get(n, 0):>6}{deaths.get(n, 0):>6}")
+    return "\n".join(lines)
+
+
+def kb_stats(game: str = "", all_games: bool = False) -> str:
+    """ROADMAP v2 #10：知识库规模与变动统计（文件/体积/最大文件/修订/回滚/学习）。"""
+    if all_games and os.path.isdir(KB_DIR):
+        games = [
+            d for d in sorted(os.listdir(KB_DIR))
+            if os.path.isdir(os.path.join(KB_DIR, d)) and d != KB_HISTORY_DIRNAME
+        ] or ["default"]
+    else:
+        games = [safe_name(game or active_game()) or "default"]
+    lines = []
+    for g in games:
+        d = kb_game_dir(g)
+        if not os.path.isdir(d):
+            lines.append(f"[{g}] （空分区）")
+            continue
+        files = [f for f in os.listdir(d) if f.endswith(".md")]
+        sizes = []
+        for f in files:
+            try:
+                sizes.append((os.path.getsize(os.path.join(d, f)), f))
+            except OSError:
+                pass
+        sizes.sort(reverse=True)
+        n_hist = n_roll = 0
+        hist_dir = os.path.join(KB_DIR, KB_HISTORY_DIRNAME)
+        prefix = re.sub(r"[^\w.-]+", "_", g) + "_"
+        if os.path.isdir(hist_dir):
+            for hf in os.listdir(hist_dir):
+                if not hf.endswith(".jsonl") or not hf.startswith(prefix):
+                    continue
+                try:
+                    with open(os.path.join(hist_dir, hf), encoding="utf-8") as f:
+                        for line in f:
+                            if not line.strip():
+                                continue
+                            n_hist += 1
+                            if '"pre-rollback"' in line or '"rollback"' in line:
+                                n_roll += 1
+                except OSError:
+                    pass
+        lines.append(f"[{g}] {len(files)} 篇 / {_dir_mb(d):.3f} MB ｜ 历史修订 {n_hist} 条（含回滚快照 {n_roll}）")
+        for size, fn in sizes[:5]:
+            lines.append(f"    {size / 1024:8.1f} KB  {fn}")
+    archive_mb = _dir_mb(ARCHIVE_DIR) if os.path.isdir(ARCHIVE_DIR) else 0.0
+    lines.append(f"[归档] {archive_mb:.3f} MB ｜ [知识库合计] {_dir_mb(KB_DIR) if os.path.isdir(KB_DIR) else 0.0:.3f} MB")
+    learns = read_events(10**9, "learn")
+    if learns:
+        kept_total = sum(safe_int(e.get("kept")) for e in learns)
+        lines.append(f"[学习] 视频学习 {len(learns)} 次 / 累计入库 {kept_total} 条 / 最近 {learns[-1].get('ts')}")
+    return "\n".join(lines)
 
 
 def kb_switch_tactic(tactic_file: str) -> str:
@@ -1918,7 +2043,7 @@ def _with_condition(tactic: str) -> str:
 def seed_knowledge(game: str | None = None, force: bool = False) -> list:
     """按游戏档案补种 seed 知识到 knowledge_md/<game>/（已存在则不覆盖）。"""
     g = safe_name(game or active_game()) or "default"
-    prof = _read_yaml(os.path.join(PROFILE_DIR, f"{g}.yaml"))
+    prof = _load_profile_chain(g)
     combat = prof.get("combat") or {}
     pred = prof.get("predictor") or {}
     tactics = [str(t) for t in (combat.get("tactics") or []) if str(t).strip()]
@@ -2161,7 +2286,7 @@ class Perception:
         self._mock = self._load_mock()
 
     def _load_mock(self) -> dict:
-        prof = _read_yaml(os.path.join(PROFILE_DIR, f"{safe_name(active_game())}.yaml"))
+        prof = _load_profile_chain(safe_name(active_game()))
         m = (prof.get("perception") or {}).get("mock") or {}
         if not m:
             m = {
@@ -4132,9 +4257,12 @@ def profile_check_one(game: str) -> list:
     path = os.path.join(PROFILE_DIR, f"{g}.yaml")
     if not os.path.exists(path):
         return [("ERROR", "file", f"档案不存在: game_profiles/{g}.yaml")]
-    prof = _read_yaml(path)
-    if not prof:
+    if not _read_yaml(path):
         return [("ERROR", "file", f"档案无法解析为 YAML 字典: {g}.yaml（或缺少 pyyaml）")]
+    prof = _load_profile_chain(g)  # 校验合并后的生效配置（ROADMAP v2 #11）
+    parent = safe_name(str(prof.get("extends") or str((_read_yaml(path) or {}).get("extends") or "")))
+    if parent and not os.path.exists(os.path.join(PROFILE_DIR, f"{parent}.yaml")):
+        _pc_issue(issues, "ERROR", "extends", f"父档案不存在: {parent}.yaml")
 
     # 一、游戏元信息
     name = str((prof.get("game") or {}).get("name") or "").strip()
@@ -4738,6 +4866,45 @@ def event_stats(kind: str = "") -> str:
     return "\n".join(lines)
 
 
+def replay(tail: int = 0) -> str:
+    """ROADMAP v2 #12：基于 events.jsonl 的对局回放（文本时间线）。
+
+    默认取「上一个 session_end 之后」的最近一局窗口；死亡回合前后标注 ☠。
+    """
+    evs = read_events(10**9)
+    if not evs:
+        return "暂无事件记录（先跑一局：python agent.py run --dry-run --rounds 20）"
+    ends = [i for i, e in enumerate(evs) if e.get("kind") == "session_end"]
+    start = ends[-2] + 1 if len(ends) >= 2 else 0
+    window = evs[start:]
+    if safe_int(tail) > 0:
+        window = window[-safe_int(tail) :]
+    death_rounds = {safe_int(e.get("round")) for e in window if e.get("kind") == "death"}
+    lines = [f"== 对局回放（最近一局 · 事件 {len(window)} 条）=="]
+    for e in window:
+        kind = e.get("kind")
+        ts = str(e.get("ts", ""))[-8:]
+        if kind == "decision":
+            r = safe_int(e.get("round"))
+            near_death = any((r + d) in death_rounds for d in (-1, 0, 1))
+            mark = "☠" if near_death else " "
+            lines.append(
+                f"{mark} {ts} R{r:<5} {str(e.get('action', '?')):<9} "
+                f"来源={str(e.get('source') or '?'):<7} 决策={e.get('decision', '?')} 心态={e.get('mindset', '?')}"
+            )
+        elif kind == "death":
+            lines.append(f"☠ {ts} R{safe_int(e.get('round'))} 死亡（累计 {safe_int(e.get('deaths'))}）")
+        elif kind == "tune":
+            lines.append(f"⚙ {ts} {e.get('detail', '')}")
+        elif kind == "learn":
+            lines.append(f"📚 {ts} 视频学习：{e.get('frames')} 帧 → 入库 {e.get('kept')} 条")
+        elif kind == "session_end":
+            lines.append(
+                f"🏁 {ts} 收局：回合={e.get('rounds')} 死亡={e.get('deaths')} 耗时={e.get('elapsed')}s"
+            )
+    return "\n".join(lines)
+
+
 # ===========================================================================
 # 15. CLI
 # ===========================================================================
@@ -4761,7 +4928,8 @@ GUIDE = """# Universal-Game-Framework · 单文件游戏 Agent 使用手册
     action   执行一个动作：action move --x 100 --y 200 / action attack
     set      切套装：set retreat
     afk      查看 AFK 弹窗处理指引
-    kb       知识库：list / search / write / append / export / import / boss / tactic / clean
+    kb       知识库：list / search / write / append / export / import / boss(--top N 排行) /
+             tactic / clean / history / rollback / maintain / stats
     learn    视频学习：learn video.mp4 或 learn --url <链接> --frames 5
     report   生成一份对局报告（写 run_logs/，可选 Webhook）
     doctor   环境体检：依赖/目录/档案/感知/密钥，✓⚠✗ 清单（致命项退出码 1）
@@ -4770,6 +4938,7 @@ GUIDE = """# Universal-Game-Framework · 单文件游戏 Agent 使用手册
     logs     查看运行日志：--tail N / --grep KW / --events --kind decision / --stats
     session  看会话记忆与历史战绩（--all 全部游戏汇总）
     brief    开局侦察报告：档案/知识库/战绩/调参一屏聚合
+    replay   对局回放：事件时间线（--tail N 只看最后 N 条）
     tune     自动调参：tune --status / tune --reset
     selftest 离线自检：不碰键鼠、不用密钥，跑通全链路并断言关键产物
 
@@ -4817,7 +4986,12 @@ def _cli_kb(args) -> int:
     elif sub == "import":
         print(kb_import(args.backup))
     elif sub == "boss":
-        print(kb_query_boss(args.name or ""))
+        if safe_int(getattr(args, "top", 0)) > 0:
+            print(kb_boss_ranking(args.top, game))
+        else:
+            print(kb_query_boss(args.name or ""))
+    elif sub == "stats":
+        print(kb_stats(game, args.all))
     elif sub == "tactic":
         print(kb_switch_tactic(args.filename))
     elif sub == "clean":
@@ -4969,6 +5143,7 @@ def build_parser() -> argparse.ArgumentParser:
     k.add_argument("backup")
     k = kbsub.add_parser("boss")
     k.add_argument("name", nargs="?", default="")
+    k.add_argument("--top", type=int, default=0, help="危险度排行 Top N（ROADMAP v2 #9）")
     k = kbsub.add_parser("tactic")
     k.add_argument("filename")
     k = kbsub.add_parser("clean")
@@ -4978,6 +5153,8 @@ def build_parser() -> argparse.ArgumentParser:
     k = kbsub.add_parser("rollback")
     k.add_argument("filename")
     k.add_argument("--rev", type=int, default=1)
+    k = kbsub.add_parser("stats")
+    k.add_argument("--all", action="store_true", help="全部游戏分区")
     for p in (kbsub.choices["list"], kbsub.choices["export"], kbsub.choices["maintain"]):
         p.add_argument("--all", action="store_true")
 
@@ -5020,6 +5197,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("brief", help="开局侦察报告（档案/知识库/战绩/调参一屏）")
     sp.add_argument("game", nargs="?", default="", help="指定游戏（缺省=当前）")
+
+    sp = sub.add_parser("replay", help="对局回放：事件时间线（ROADMAP v2 #12）")
+    sp.add_argument("--tail", type=int, default=0, help="只看最后 N 条事件")
     return ap
 
 
@@ -5079,6 +5259,8 @@ def main(argv=None) -> int:
         print(session_summary(all_games=args.all))
     elif cmd == "brief":
         return brief(args.game)
+    elif cmd == "replay":
+        print(replay(args.tail))
     elif cmd == "tune":
         if args.reset:
             print(auto_tuner_reset())
