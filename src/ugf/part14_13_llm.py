@@ -61,7 +61,7 @@ def _resolve_llm_endpoint():
     # F8 切换的手动模式
     if _llm_mode_override == "local":
         return ("http://127.0.0.1:11434/v1/chat/completions", "ollama",
-                os.getenv("OLLAMA_MODEL", "qwen2.5:7b"))
+                os.getenv("OLLAMA_MODEL", "laya"))
     if _llm_mode_override == "cloud":
         return ((os.getenv("LLM_API_URL") or "").strip(),
                 (os.getenv("LLM_API_KEY") or "").strip(),
@@ -74,7 +74,7 @@ def _resolve_llm_endpoint():
         if r.ok:
             models = [m.get("name", "") for m in r.json().get("models", [])]
             pref = os.getenv("OLLAMA_MODEL", "")
-            model = pref or (models[0] if models else "qwen2.5:7b")
+            model = pref or (models[0] if models else "laya")
             return ("http://127.0.0.1:11434/v1/chat/completions", "ollama", model)
     except Exception:
         pass
