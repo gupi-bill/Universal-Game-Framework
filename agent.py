@@ -1595,6 +1595,32 @@ STATE_FILE = os.path.join(BASE_DIR, "agent_state.json")
 HISTORY_FILE = os.path.join(BASE_DIR, "session_history.json")
 SNAP_FILE = os.path.join(RUN_LOGS, "agent_snapshot.json")
 
+# ROADMAP #18：状态文件结构版本化——读取时自动迁移，写入时打版本号，
+# 未来改结构不会弄坏老用户的断点续玩与历史战绩。
+STATE_SCHEMA_VERSION = 1
+
+
+def _migrate_state_v0_to_v1(st: dict) -> dict:
+    """v0（无版本号）→ v1：字段结构不变，仅补版本号；未来字段改名在此挂钩。"""
+    st = dict(st)
+    st["schema_version"] = 1
+    return st
+
+
+_STATE_MIGRATIONS = {0: _migrate_state_v0_to_v1}
+
+
+def _migrate_state(st: dict) -> dict:
+    """按 schema_version 逐级执行迁移直到当前版本。"""
+    ver = safe_int(st.get("schema_version"), 0)
+    while ver < STATE_SCHEMA_VERSION:
+        fn = _STATE_MIGRATIONS.get(ver)
+        if fn is None:
+            break
+        st = fn(st)
+        ver = safe_int(st.get("schema_version"), ver + 1)
+    return st
+
 
 def session_load() -> dict:
     default = {
@@ -1617,12 +1643,15 @@ def session_load() -> dict:
         return default
     if not isinstance(st, dict):
         return default
+    st = _migrate_state(st)
     default.update(st)
     return default
 
 
 def session_save(state: dict):
     try:
+        state = dict(state)
+        state["schema_version"] = STATE_SCHEMA_VERSION
         with open(STATE_FILE, "w", encoding="utf-8") as f:
             json.dump(state, f, ensure_ascii=False, indent=2)
     except (OSError, TypeError, ValueError) as e:
@@ -1668,28 +1697,32 @@ def session_record_end(game: str, rounds: int, deaths: int, report: str = ""):
     _history_append({"at": st["last_played"], "game": game, "rounds": rounds, "deaths": deaths})
 
 
+def _read_history() -> list:
+    """战绩历史双格式兼容（ROADMAP #18）：
+    旧格式 = 纯列表；新格式 = {"schema_version": N, "records": [...]}。"""
+    raw = _read_json(HISTORY_FILE, [])
+    if isinstance(raw, dict):
+        recs = raw.get("records")
+        return [r for r in recs if isinstance(r, dict)] if isinstance(recs, list) else []
+    if isinstance(raw, list):
+        return [r for r in raw if isinstance(r, dict)]
+    return []
+
+
 def _history_append(record: dict):
-    h = []
-    try:
-        if os.path.exists(HISTORY_FILE):
-            with open(HISTORY_FILE, encoding="utf-8") as f:
-                h = json.load(f)
-        if not isinstance(h, list):
-            h = []
-    except Exception:
-        h = []
-    h = [r for r in h if isinstance(r, dict)]
+    h = _read_history()
     h.append(record)
+    payload = {"schema_version": STATE_SCHEMA_VERSION, "records": h[-100:]}
     try:
         with open(HISTORY_FILE, "w", encoding="utf-8") as f:
-            json.dump(h[-100:], f, ensure_ascii=False, indent=2)
+            json.dump(payload, f, ensure_ascii=False, indent=2)
     except OSError:
         pass
 
 
 def session_summary() -> str:
     st = session_load()
-    played = [r for r in _read_json(HISTORY_FILE, []) if isinstance(r, dict)]
+    played = _read_history()
     total_rounds = sum(safe_int(r.get("rounds")) for r in played)
     total_deaths = sum(safe_int(r.get("deaths")) for r in played)
     line = (
