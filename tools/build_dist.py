@@ -104,7 +104,7 @@ def build_deb() -> str:
                 "Architecture: amd64\n"
                 "Depends: python3, python3-yaml, python3-requests, python3-dotenv\n"
                 "Maintainer: FlorrVLM-Agent\n"
-                "Description: Visual game agent with VLM perception and MCP tools\n"
+                "Description: Universal Game Agent Framework (VLM perception + MCP tools + self-learning)\n"
                 % (PKG, VERSION)
             )
         with open(os.path.join(debin, "conffiles"), "w", encoding="utf-8") as f:
