@@ -17,6 +17,10 @@ agent_state.json
 session_history.json
 tuned_overrides.yaml
 
+# 构建/打包产物
+build/
+*.egg-info/
+
 # 缓存
 .pytest_cache/
 .ruff_cache/
@@ -35,3 +39,6 @@ htmlcov/
 Thumbs.db
 *.bak
 *~
+
+# 构建产物
+dist/

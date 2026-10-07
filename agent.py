@@ -44,7 +44,30 @@ from collections import deque
 from datetime import datetime
 from typing import TypedDict
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+def _resolve_base_dir() -> str:
+    """运行期数据目录解析（ROADMAP #21）。
+
+    优先级：UGF_HOME 环境变量 > agent.py 所在目录（须为真实可写目录）> ~/.ugf。
+    pip 安装或 zipapp 运行时代码目录不可写（甚至在压缩包内），
+    知识库/日志/状态文件/配置档案一律落到用户目录，仓库内运行行为不变。
+    """
+    home = (os.getenv("UGF_HOME") or "").strip()
+    if home:
+        p = os.path.abspath(os.path.expanduser(home))
+        with contextlib.suppress(OSError):
+            os.makedirs(p, exist_ok=True)
+        return p
+    code_dir = os.path.dirname(os.path.abspath(__file__))
+    if os.path.isdir(code_dir) and ".pyz" not in code_dir and os.access(code_dir, os.W_OK):
+        return code_dir
+    p = os.path.join(os.path.expanduser("~"), ".ugf")
+    with contextlib.suppress(OSError):
+        os.makedirs(p, exist_ok=True)
+    return p
+
+
+BASE_DIR = _resolve_base_dir()
 
 VERSION = "3.0.0-single"
 

@@ -234,3 +234,20 @@ def test_secret_scan_detects_fake_token(tmp_path):
     leak.write_text('TOKEN = "gh' + "p_" + "A" * 36 + '"\n', encoding="utf-8")
     r = subprocess.run([sys.executable, scanner, str(leak)], capture_output=True, text=True, timeout=60)
     assert r.returncode == 1 and "GitHub Token" in r.stdout
+
+
+# ---------------------------------------------------------------------------
+# #21 pip 可安装化 / UGF_HOME
+# ---------------------------------------------------------------------------
+def test_resolve_base_dir_ugf_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("UGF_HOME", str(tmp_path / "home"))
+    resolved = agent._resolve_base_dir()
+    assert resolved == str(tmp_path / "home")
+    assert (tmp_path / "home").is_dir(), "UGF_HOME 不存在时应自动创建"
+
+
+def test_resolve_base_dir_repo_default(monkeypatch):
+    monkeypatch.delenv("UGF_HOME", raising=False)
+    d = agent._resolve_base_dir()
+    assert os.path.isdir(d)
+    assert os.path.exists(os.path.join(d, "agent.py")), "仓库内运行应回落代码目录"
