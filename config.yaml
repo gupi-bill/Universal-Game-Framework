@@ -8,11 +8,15 @@ server:
   panel_port: 5002             # 本地面板端口
 
 perception:
-  # v2.0 S6：感知后端离线化
-  # backend: auto = 有截图工具+检测脚本走 http(真实YOLO)，否则自动降级 mock
-  #          mock = 直接返回配置里的合成场景（无截图、无YOLO、无显卡）
-  #          http = 强制走真实截图+YOLO（不可用时返回明确错误而非崩溃）
-  # 环境变量 UGF_PERCEPTION_BACKEND=mock|http|auto 优先级高于此处
+  # 感知后端（ROADMAP #6 插件化，四选一）：
+  # backend: auto     = dry-run 走 mock，否则走 http
+  #          mock     = 直接返回配置里的合成场景（无截图、无YOLO、无显卡）
+  #          http     = 接外部检测服务（不可用时返回明确错误而非崩溃）
+  #          local    = mss 抓屏 + ONNX Runtime 本地推理（YOLOv8 导出的 .onnx，
+  #                     需 pip install mss numpy onnxruntime opencv-python-headless）
+  #          template = OpenCV 模板匹配（模板目录每类实体一张 <label>.png，零模型，
+  #                     需 pip install opencv-python-headless numpy mss）
+  # 环境变量 UGF_PERCEPTION_BACKEND=mock|http|local|template|auto 优先级高于此处
   backend: auto
   yolo_timeout: 8              # YOLO 检测超时秒数，超过就跳过这一帧
   skip_on_timeout: 0.8         # 超时时休眠秒数，给 CPU 喘息
@@ -20,6 +24,19 @@ perception:
   screen_h: 1080
   source_w: 0                  # 感知后端坐标系宽（0=与逻辑屏一致不缩放；ROADMAP #19）
   source_h: 0                  # 感知后端坐标系高
+  # ---- local 后端（ROADMAP #6）----
+  local:
+    model_path: ""             # YOLOv8 导出的 .onnx 路径
+    input_size: 640            # 推理输入边长
+    conf: 0.5                  # 置信度阈值
+    labels: []                 # 类别索引→名称，空则用 class_<idx>
+    rarity_map: {}             # 名称→稀有度档（如 {hornet: Common}）
+  # ---- template 后端（ROADMAP #6）----
+  template:
+    dir: ""                    # 模板目录，每个 <label>.png 一类实体
+    conf: 0.8                  # matchTemplate 阈值
+    rarity_map: {}             # 名称→稀有度档
+    source_image: ""           # 调试用：指定截图文件代替实时抓屏
   # v2.0 S15：离线场景已迁回各游戏档案（game_profiles/<game>.yaml 的 perception.mock）。
   # 此处不再维护 mock 数据；未声明时回退 config.py 的 DEFAULT（florr 场景）。
 predictor:
