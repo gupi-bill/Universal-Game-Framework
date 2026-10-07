@@ -113,8 +113,91 @@ def safe_int(v, default: int = 0) -> int:
     return int(f)
 
 
+def _rotate_logs_if_needed(force: bool = False):
+    """ROADMAP #16：日志轮转落地——超过 logs.max_size_mb 压缩轮转（gzip），
+    超过 logs.retention_days 的旧日志删除。默认 60 秒最多检查一次，长跑低开销。"""
+    global _last_rotate_check
+    now = time.time()
+    if not force and now - _last_rotate_check < 60:
+        return
+    _last_rotate_check = now
+    try:
+        os.makedirs(RUN_LOGS, exist_ok=True)
+        max_mb = safe_float(cfg_get("logs.max_size_mb", 20), 20)
+        retention = safe_int(cfg_get("logs.retention_days", 7), 7)
+        cutoff = now - max(0, retention) * 86400
+        for fn in os.listdir(RUN_LOGS):
+            if not fn.startswith("agent_") or ".log" not in fn:
+                continue
+            fp = os.path.join(RUN_LOGS, fn)
+            try:
+                stt = os.stat(fp)
+            except OSError:
+                continue
+            if fn.endswith(".log") and max_mb > 0 and stt.st_size > max_mb * 1024 * 1024:
+                import gzip
+
+                gz = f"{fp}.{time.strftime('%H%M%S')}.gz"
+                try:
+                    with open(fp, "rb") as src, gzip.open(gz, "wb") as dst:
+                        shutil.copyfileobj(src, dst)
+                    os.truncate(fp, 0)
+                except OSError:
+                    pass
+            elif stt.st_mtime < cutoff:
+                with contextlib.suppress(OSError):
+                    os.remove(fp)
+    except OSError:
+        pass
+
+
+_last_rotate_check = 0.0
+
+EVENTS_FILE_NAME = "events.jsonl"
+
+
+def log_event(kind: str, **data):
+    """ROADMAP #16：结构化事件流（run_logs/events.jsonl），一行一事件，可机器分析。
+
+    kind 约定：decision / death / tune / learn / session_end / config_reload。
+    """
+    try:
+        os.makedirs(RUN_LOGS, exist_ok=True)
+        rec = {"ts": datetime.now().isoformat(timespec="seconds"), "kind": kind}
+        rec.update(data)
+        with open(os.path.join(RUN_LOGS, EVENTS_FILE_NAME), "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
+    except (OSError, TypeError, ValueError):
+        pass
+
+
+def read_events(tail: int = 20, kind: str = "") -> list:
+    """读取结构化事件（可选按 kind 过滤），返回最后 tail 条。"""
+    path = os.path.join(RUN_LOGS, EVENTS_FILE_NAME)
+    if not os.path.exists(path):
+        return []
+    out = []
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                if kind and rec.get("kind") != kind:
+                    continue
+                out.append(rec)
+    except OSError:
+        return []
+    return out[-max(1, safe_int(tail, 20)) :]
+
+
 def log(msg: str):
-    """带时间戳的日志；同时写 run_logs/agent_YYYYMMDD.log。"""
+    """带时间戳的日志；同时写 run_logs/agent_YYYYMMDD.log（带轮转）。"""
+    _rotate_logs_if_needed()
     line = f"[{datetime.now().strftime('%H:%M:%S')}] {msg}"
     print(line, flush=True)
     try:
@@ -200,6 +283,7 @@ DEFAULT = {
     "paths.run_logs": "run_logs",
     "paths.backups": "kb_backups",
     "logs.retention_days": 7,
+    "logs.max_size_mb": 20,
 }
 
 CONFIG_PATH = os.path.join(BASE_DIR, "config.yaml")
@@ -2262,6 +2346,7 @@ def learn_from_video(
         f.write(content)
     if cleanup:
         shutil.rmtree(FRAME_DIR, ignore_errors=True)
+    log_event("learn", frames=len(tactics), kept=len(kept), file=path)
     return {"frames": len(tactics), "kept": len(kept), "file": path}
 
 
@@ -2471,6 +2556,7 @@ def run_agent(max_rounds: int = 0, interval: float = None) -> dict:
                 if death_streak >= dead_threshold:
                     deaths += 1
                     deaths_cycle += 1
+                    log_event("death", round=rounds, deaths=deaths)
                     if should_review(state):
                         log(review_round(False, "玩家死亡，复盘本局", state))
                     else:
@@ -2527,6 +2613,14 @@ def run_agent(max_rounds: int = 0, interval: float = None) -> dict:
             else:
                 out = game_action(atype)
             action_counts[atype] = action_counts.get(atype, 0) + 1
+            log_event(
+                "decision",
+                round=rounds,
+                action=atype,
+                source=str(action.get("source") or ""),
+                decision=ev.get("decision"),
+                mindset=ev.get("mindset"),
+            )
             if any(k in out for k in ("错误", "必须提供", "未知动作")):
                 log(f"[动作] 异常: {out}")
 
@@ -3083,6 +3177,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("game", nargs="?", default="", help="档案名（缺省=当前激活游戏）")
     sp.add_argument("--all", action="store_true", help="校验 game_profiles/ 下全部档案")
     sp.add_argument("--strict", action="store_true", help="严格模式：WARN 也判失败")
+
+    sp = sub.add_parser("logs", help="查看运行日志 / 结构化事件流")
+    sp.add_argument("--tail", type=int, default=20, help="最后 N 行（默认 20）")
+    sp.add_argument("--grep", default="", help="按关键词过滤")
+    sp.add_argument("--events", action="store_true", help="看结构化事件流（JSONL）")
+    sp.add_argument("--kind", default="", help="事件类型过滤：decision/death/tune/learn/session_end")
     return ap
 
 
@@ -3144,6 +3244,23 @@ def main(argv=None) -> int:
         return selftest(args.rounds)
     elif cmd == "profile-check":
         return profile_check(args.game, check_all=args.all, strict=args.strict)
+    elif cmd == "logs":
+        if args.events:
+            for e in read_events(args.tail, args.kind):
+                print(json.dumps(e, ensure_ascii=False))
+        else:
+            p = os.path.join(RUN_LOGS, f"agent_{datetime.now().strftime('%Y%m%d')}.log")
+            lines = []
+            if os.path.exists(p):
+                try:
+                    with open(p, encoding="utf-8") as f:
+                        lines = f.read().splitlines()
+                except OSError:
+                    lines = []
+            if args.grep:
+                lines = [ln for ln in lines if args.grep.lower() in ln.lower()]
+            for ln in lines[-max(1, args.tail) :]:
+                print(ln)
     else:
         ap.print_help()
     return 0
