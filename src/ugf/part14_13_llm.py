@@ -52,18 +52,74 @@ def _validate_action(obj) -> tuple[ActionDict | None, str]:
     return out, ""
 
 
-def llm_decide(state: FramePayload, predictions: list, combat_eval: dict, kb_text: str) -> ActionDict:
-    """LLM 决策（ROADMAP #5/#8）：传输层重试 + schema 校验 + 一次修复重试 + 规则兜底。
+_llm_mode_override = None  # None=自动, "local"/"cloud"=手动切换
 
-    - prompt 可被游戏档案 llm.system_prompt 覆盖
-    - 输出不合法时把校验错误回喂 LLM 修复一次，仍不合法才落 fallback_decide
-    - 返回值恒带 source 标签：llm / kb / rule
-    """
-    url = (os.getenv("LLM_API_URL") or "").strip()
-    key = (os.getenv("LLM_API_KEY") or "").strip()
+
+def _resolve_llm_endpoint():
+    """返回 (url, key, model)。本地 Ollama 优先，没起才用云端。"""
+    global _llm_mode_override
+    # F8 切换的手动模式
+    if _llm_mode_override == "local":
+        return ("http://127.0.0.1:11434/v1/chat/completions", "ollama",
+                os.getenv("OLLAMA_MODEL", "qwen2.5:7b"))
+    if _llm_mode_override == "cloud":
+        return ((os.getenv("LLM_API_URL") or "").strip(),
+                (os.getenv("LLM_API_KEY") or "").strip(),
+                os.getenv("LLM_MODEL", ""))
+
+    # 自动：先探测本地 Ollama
+    try:
+        import requests
+        r = requests.get("http://127.0.0.1:11434/api/tags", timeout=1.5)
+        if r.ok:
+            models = [m.get("name", "") for m in r.json().get("models", [])]
+            pref = os.getenv("OLLAMA_MODEL", "")
+            model = pref or (models[0] if models else "qwen2.5:7b")
+            return ("http://127.0.0.1:11434/v1/chat/completions", "ollama", model)
+    except Exception:
+        pass
+    # 回退云端
+    return ((os.getenv("LLM_API_URL") or "").strip(),
+            (os.getenv("LLM_API_KEY") or "").strip(),
+            os.getenv("LLM_MODEL", ""))
+
+
+def _hotkey_thread():
+    """F8 切换 本地Ollama ↔ 云端API ↔ 离线规则。"""
+    global _llm_mode_override
+    modes = [None, "local", "cloud"]  # None=自动
+    labels = ["自动", "本地Ollama", "云端API"]
+    idx = 0
+    try:
+        import pynput.keyboard as kb
+    except ImportError:
+        return  # 没装 pynput 就不启用快捷键
+    def _on_press(key):
+        nonlocal idx
+        if key == kb.Key.f8:
+            idx = (idx + 1) % len(modes)
+            _llm_mode_override = modes[idx]
+            log(f"[快捷键] F8 → LLM 模式: {labels[idx]}")
+    listener = kb.Listener(on_press=_on_press)
+    listener.daemon = True
+    listener.start()
+    log("[快捷键] F8 = 切换 LLM 模式 (自动/本地Ollama/云端API)")
+
+
+# 启动时开快捷键线程
+try:
+    import threading
+    threading.Thread(target=_hotkey_thread, daemon=True).start()
+except Exception:
+    pass
+
+
+def llm_decide(state: FramePayload, predictions: list, combat_eval: dict, kb_text: str) -> ActionDict:
+    """LLM 决策：本地 Ollama 优先，F8 可切云端/离线。"""
     if not cfg_get("llm.use_ai", True):
         return fallback_decide(state, combat_eval, kb_text)
-    if not url or not key:
+    url, key, model = _resolve_llm_endpoint()
+    if not url:
         return fallback_decide(state, combat_eval, kb_text)
     try:
         import requests
@@ -88,7 +144,7 @@ def llm_decide(state: FramePayload, predictions: list, combat_eval: dict, kb_tex
 
     def _call(msgs):
         payload: dict = {
-            "model": os.getenv("LLM_MODEL", ""),
+            "model": model or os.getenv("LLM_MODEL", ""),
             "messages": msgs,
             "max_tokens": safe_int(cfg_get("llm.max_tokens", 800), 800),
             "temperature": safe_float(cfg_get("llm.temperature", 0.3), 0.3),
