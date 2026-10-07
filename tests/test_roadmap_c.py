@@ -62,3 +62,51 @@ def test_canonical_tactics_survive_polluted_kb(tmp_path):
     assert "tactics.md" in out
     tactics = agent.extract_tactics(out)
     assert any(tag == "retreat" for tag, _ in tactics), "决策闭环必须能从检索结果提取到种子战术"
+
+
+# ---------------------------------------------------------------------------
+# #12 知识库历史与回滚
+# ---------------------------------------------------------------------------
+def test_kb_history_and_rollback(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent, "KB_DIR", str(tmp_path))
+    game = "histgame"
+    agent.kb_write("t1", "V1", game)  # 文件不存在 → 无快照
+    agent.kb_append("t1", "V2", game)  # 快照 V1
+    agent.kb_write("t1", "V3", game)  # 快照 V1+V2
+    h = agent.kb_history("t1", game)
+    assert "2 条历史修订" in h
+    msg = agent.kb_rollback("t1", 1, game)  # 回到最新快照 = V1+V2
+    assert "已回滚" in msg
+    p = agent.kb_resolve("t1", game)
+    with open(p, encoding="utf-8") as f:
+        content = f.read()
+    assert "V1" in content and "V2" in content and "V3" not in content
+    # 回滚动作本身也留了快照 → 历史 +1
+    assert "3 条历史修订" in agent.kb_history("t1", game)
+
+
+def test_kb_rollback_out_of_range(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent, "KB_DIR", str(tmp_path))
+    agent.kb_write("t2", "A", "g2")
+    agent.kb_write("t2", "B", "g2")  # 1 条快照
+    assert "超出范围" in agent.kb_rollback("t2", 99, "g2")
+    assert "暂无历史修订" in agent.kb_rollback("nofile", 1, "g2")
+
+
+def test_kb_history_revisions_cap(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent, "KB_DIR", str(tmp_path))
+    monkeypatch.setattr(agent, "_CFG", {"kb": {"history_revisions": 3, "history_max_kb": 256}})
+    for i in range(6):
+        agent.kb_write("t3", f"版本{i}", "g3")
+    p = agent.kb_resolve("t3", "g3")
+    rows = agent._kb_history_rows(p)
+    assert len(rows) == 3, "历史应滚动保留最近 3 条"
+
+
+def test_kb_history_cli(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(agent, "KB_DIR", str(tmp_path))
+    agent.kb_write("t4", "x", "g4")
+    agent.kb_write("t4", "y", "g4")
+    assert agent.main(["--game", "g4", "kb", "history", "t4"]) == 0
+    out = capsys.readouterr().out
+    assert "历史修订" in out

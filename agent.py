@@ -307,6 +307,8 @@ DEFAULT = {
     "paths.run_logs": "run_logs",
     "paths.backups": "kb_backups",
     "kb.search_top_n": 5,  # ROADMAP #11：检索返回 Top-N
+    "kb.history_revisions": 20,  # ROADMAP #12：每文件保留的历史修订数
+    "kb.history_max_kb": 256,  # ROADMAP #12：超过该大小的文件历史不存正文
     "logs.retention_days": 7,
     "logs.max_size_mb": 20,
     # ROADMAP #8：LLM 决策（prompt 可由游戏档案覆盖；空=内置 SYSTEM_PROMPT）
@@ -623,6 +625,7 @@ def kb_write(filename: str, content: str, game: str = "") -> str:
     path = kb_resolve(filename, game)
     if path is None:
         return f"错误: 非法的知识库路径 (filename={filename!r}, game={game!r})"
+    _kb_history_save(path, "write")
     try:
         with open(path, "w", encoding="utf-8") as f:
             f.write(content or "")
@@ -635,6 +638,7 @@ def kb_append(filename: str, content: str, game: str = "") -> str:
     path = kb_resolve(filename, game)
     if path is None:
         return f"错误: 非法的知识库路径 (filename={filename!r}, game={game!r})"
+    _kb_history_save(path, "append")
     try:
         exists = os.path.exists(path)
         with open(path, "a" if exists else "w", encoding="utf-8") as f:
@@ -644,6 +648,111 @@ def kb_append(filename: str, content: str, game: str = "") -> str:
     except OSError as e:
         return f"追加到知识库失败: {e}"
     return f"已追加到知识库: {path}"
+
+
+def _kb_history_file(path: str) -> str:
+    """ROADMAP #12：某知识库文件对应的历史 JSONL 路径（KB_DIR/.history/ 下）。"""
+    rel = os.path.relpath(path, KB_DIR).replace(os.sep, "/")
+    key = re.sub(r"[^\w.-]+", "_", rel)
+    d = os.path.join(KB_DIR, KB_HISTORY_DIRNAME)
+    os.makedirs(d, exist_ok=True)
+    return os.path.join(d, key + ".jsonl")
+
+
+def _kb_history_save(path: str, op: str):
+    """写前自动快照：整份正文追加进历史 JSONL，滚动保留最近 N 条。
+
+    超过 kb.history_max_kb 的文件只记事件不存正文（防止历史目录膨胀）。
+    """
+    try:
+        if not os.path.exists(path):
+            return
+        with open(path, encoding="utf-8") as f:
+            content = f.read()
+    except (OSError, UnicodeDecodeError):
+        return
+    max_kb = safe_int(cfg_get("kb.history_max_kb", 256), 256)
+    if len(content.encode("utf-8")) > max_kb * 1024:
+        content = ""
+    rec = {
+        "ts": datetime.now().isoformat(timespec="seconds"),
+        "op": op,
+        "size": len(content),
+        "content": content,
+    }
+    hf = _kb_history_file(path)
+    try:
+        lines = []
+        if os.path.exists(hf):
+            with open(hf, encoding="utf-8") as f:
+                lines = f.read().splitlines()
+        lines.append(json.dumps(rec, ensure_ascii=False))
+        cap = max(1, safe_int(cfg_get("kb.history_revisions", 20), 20))
+        with open(hf, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines[-cap:]) + "\n")
+    except OSError:
+        pass
+
+
+def _kb_history_rows(path: str) -> list:
+    hf = _kb_history_file(path)
+    if not os.path.exists(hf):
+        return []
+    rows = []
+    try:
+        with open(hf, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rows.append(json.loads(line))
+                except ValueError:
+                    continue
+    except OSError:
+        return []
+    return rows
+
+
+def kb_history(filename: str, game: str = "") -> str:
+    """查看某知识库文件的历史修订列表（新→旧）。"""
+    path = kb_resolve(filename, game)
+    if path is None:
+        return f"错误: 非法的知识库路径 (filename={filename!r}, game={game!r})"
+    rows = _kb_history_rows(path)
+    if not rows:
+        return f"{filename} 暂无历史修订"
+    out = [f"{filename} 共 {len(rows)} 条历史修订（新→旧）:"]
+    for i, r in enumerate(reversed(rows)):
+        out.append(f"  rev -{i + 1}: {r.get('ts')} op={r.get('op')} size={r.get('size')}")
+    return "\n".join(out)
+
+
+def kb_rollback(filename: str, rev: int = 1, game: str = "") -> str:
+    """回滚到第 rev 新的历史修订（rev=1 即上一次写入前的状态）。
+
+    回滚前会把当前内容也存进历史，因此回滚本身可再回滚。
+    """
+    path = kb_resolve(filename, game)
+    if path is None:
+        return f"错误: 非法的知识库路径 (filename={filename!r}, game={game!r})"
+    rows = _kb_history_rows(path)
+    if not rows:
+        return f"{filename} 暂无历史修订，无法回滚"
+    rev = max(1, safe_int(rev, 1))
+    idx = len(rows) - rev
+    if idx < 0:
+        return f"修订号超出范围（共 {len(rows)} 条历史）"
+    content = rows[idx].get("content")
+    if content is None:
+        return "该修订未存正文（超大文件只记事件），无法回滚"
+    _kb_history_save(path, "pre-rollback")
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+    except OSError as e:
+        return f"回滚写入失败: {e}"
+    return f"已回滚 {filename} 到 rev -{rev}（{rows[idx].get('ts')}，{len(content)} 字符）"
 
 
 def kb_query_boss(boss_name: str = "") -> str:
@@ -3231,6 +3340,10 @@ def _cli_kb(args) -> int:
         print(kb_switch_tactic(args.filename))
     elif sub == "clean":
         print(kb_clean(args.target))
+    elif sub == "history":
+        print(kb_history(args.filename, game))
+    elif sub == "rollback":
+        print(kb_rollback(args.filename, args.rev, game))
     elif sub == "maintain":
         print(kb_maintain())
     else:
@@ -3374,6 +3487,11 @@ def build_parser() -> argparse.ArgumentParser:
     k.add_argument("filename")
     k = kbsub.add_parser("clean")
     k.add_argument("--target", default="all", choices=["all", "predict", "frames"])
+    k = kbsub.add_parser("history")
+    k.add_argument("filename")
+    k = kbsub.add_parser("rollback")
+    k.add_argument("filename")
+    k.add_argument("--rev", type=int, default=1)
     for p in (kbsub.choices["list"], kbsub.choices["export"], kbsub.choices["maintain"]):
         p.add_argument("--all", action="store_true")
 

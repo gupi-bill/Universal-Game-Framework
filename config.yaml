@@ -80,6 +80,8 @@ paths:
 
 kb:
   search_top_n: 5              # 检索返回 Top-N（ROADMAP #11：BM25 排序）
+  history_revisions: 20        # 每文件保留历史修订数（ROADMAP #12）
+  history_max_kb: 256          # 超过该大小的文件历史只记事件不存正文
 
 logs:
   retention_days: 7            # 日志保留天数，超期删除
