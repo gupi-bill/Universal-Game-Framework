@@ -73,6 +73,13 @@ jobs:
       - name: ruff format --check（阻断）
         run: ruff format --check .
 
+      # ROADMAP #4 第一阶段：mypy 宽松档非阻断；核心链路注解已齐（0 error），
+      # 稳定一个版本后去掉 || true 转阻断
+      - name: mypy（非阻断）
+        run: |
+          pip install mypy
+          mypy agent.py || echo "::warning::mypy 发现类型问题（第一阶段不阻断）"
+
   secret-scan:
     name: 密钥防泄漏扫描
     runs-on: ubuntu-latest

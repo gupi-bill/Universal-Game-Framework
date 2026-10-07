@@ -42,16 +42,72 @@ import tarfile
 import time
 from collections import deque
 from datetime import datetime
+from typing import TypedDict
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 VERSION = "3.0.0-single"
 
 
+# ---------------------------------------------------------------------------
+# 核心数据流类型（ROADMAP #4）：帧 / 预判实体 / 战斗评估 / 动作
+# 全部 total=False：字段渐进演化时不破坏旧调用方
+# ---------------------------------------------------------------------------
+class FramePayload(TypedDict, total=False):
+    """感知后端统一帧载荷。"""
+
+    player: dict
+    entities: list
+    teammates: list
+    afk_popup: bool
+    error: str
+    _fallback: str
+
+
+class EntityPred(TypedDict, total=False):
+    """预判输出的单实体。x/y_predict 为 None 表示置信不足，勿信预判坐标。"""
+
+    raw_id: str
+    rarity: str
+    category: str
+    role: str
+    threat_score: float
+    x_now: float
+    y_now: float
+    x_predict: float | None
+    y_predict: float | None
+    vx_per_sec: float
+    vy_per_sec: float
+    confidence: float
+    prediction_trusted: bool
+    model: str
+
+
+class CombatEval(TypedDict, total=False):
+    """战斗评估结果。decision ∈ fight / cautious_fight / retreat。"""
+
+    decision: str
+    recommended_set: str
+    mindset: str
+    enemy_threat: float
+    threat_ratio: float
+    has_highest_boss: bool
+    retreat_reason: str
+
+
+class ActionDict(TypedDict, total=False):
+    """决策动作。source ∈ llm / kb / rule，move 时必带 x/y。"""
+
+    action: str
+    x: int
+    y: int
+    source: str
+
+
 # ===========================================================================
 # 0. 轻量工具
 # ===========================================================================
-def _load_dotenv(path: str = None):
+def _load_dotenv(path: str | None = None):
     """极简 .env 加载（省掉 python-dotenv 依赖）。已存在的环境变量优先。"""
     path = path or os.path.join(BASE_DIR, ".env")
     if not os.path.exists(path):
@@ -444,18 +500,18 @@ def reload_if_changed() -> bool:
     """config / 档案 / 调参文件 mtime 变了就热加载。"""
     global _reload_mtime
     game = active_game()
-    stamp = []
+    stamp: list = []
     for p in (CONFIG_PATH, os.path.join(PROFILE_DIR, f"{game}.yaml"), TUNED_PATH):
         try:
             stamp.append(os.path.getmtime(p))
         except OSError:
             stamp.append(None)
-    stamp = tuple(stamp)
-    if _reload_mtime is not None and stamp != _reload_mtime:
-        _reload_mtime = stamp
+    key = tuple(stamp)
+    if _reload_mtime is not None and key != _reload_mtime:
+        _reload_mtime = key
         reload_config()
         return True
-    _reload_mtime = stamp
+    _reload_mtime = key
     return False
 
 
@@ -492,7 +548,7 @@ ARCHIVE_DIR = os.path.join(BASE_DIR, str(cfg_get("agent.kb_archive_dir", "knowle
 BACKUP_DIR = os.path.join(BASE_DIR, str(cfg_get("paths.backups", "kb_backups")))
 
 
-def kb_game_dir(game: str = None) -> str:
+def kb_game_dir(game: str | None = None) -> str:
     """本游戏的知识分区 knowledge_md/<game>/。"""
     g = safe_name(game or active_game()) or "default"
     return os.path.join(KB_DIR, g)
@@ -610,7 +666,7 @@ def _text_search(keyword: str, base: str) -> str:
     kw = str(keyword or "").strip().lower()
     if not kw:
         return "未找到相关内容"
-    docs = []  # (relpath, content, literal_hit)
+    docs: list = []  # (relpath, content, literal_hit)
     for root, _dirs, files in os.walk(base):
         if KB_HISTORY_DIRNAME in root.split(os.sep):
             continue
@@ -634,7 +690,7 @@ def _text_search(keyword: str, base: str) -> str:
         return 1 if docs[i][2] else 0
 
     ranked = sorted(range(len(docs)), key=lambda i: (_tier(i), scores[i]), reverse=True)
-    hits = []
+    hits: list = []
     for i in ranked:
         rel, content, literal = docs[i]
         if not literal and scores[i] <= 0:
@@ -995,7 +1051,7 @@ PLAYER_ENEMY_MARKERS = ("player_enemy", "enemy_player", "hostile", "enemy")
 PLAYER_ALLY_MARKERS = ("player_ally", "ally", "teammate", "friend", "party")
 
 
-def detect_role(raw_id: str, explicit: str = None) -> str:
+def detect_role(raw_id: str, explicit: str | None = None) -> str:
     if explicit in ("player_enemy", "player_ally", "monster"):
         return explicit
     rid = (raw_id or "").lower()
@@ -1228,7 +1284,7 @@ class _Tracker:
                 return best
         return fits["linear"]
 
-    def predict(self):
+    def predict(self) -> EntityPred | None:
         min_frames = safe_int(cfg_get("predictor.min_frames", 3), 3)
         if len(self.history) < min_frames:
             return None
@@ -1361,8 +1417,8 @@ class Predictor:
                     "raw_id": raw_id,
                     "rarity": ent.get("rarity", "Common"),
                     "role": detect_role(raw_id, ent.get("role")),
-                    "x": float(x),
-                    "y": float(y),
+                    "x": safe_float(x),
+                    "y": safe_float(y),
                 }
             )
         assign = self._match(dets, now)
@@ -1380,7 +1436,7 @@ class Predictor:
         for uid in [u for u, t in self._t.items() if t.expired()]:
             del self._t[uid]
 
-    def all_entities(self) -> list:
+    def all_entities(self) -> list[EntityPred]:
         out = []
         for tk in self._t.values():
             p = tk.predict()
@@ -1481,7 +1537,7 @@ def _team_set_adjust(teammates: list, cur: str) -> str:
     return cur
 
 
-def judge_combat(player: dict, enemies: list, teammates: list) -> dict:
+def judge_combat(player: dict, enemies: list, teammates: list) -> CombatEval:
     """输出 decision / recommended_set / mindset / 威胁比 等。"""
     threat = enemy_threat(enemies)
     rr = safe_float(cfg_get("combat.retreat_ratio", 1.0), 1.0)
@@ -1563,7 +1619,7 @@ def should_chase(entity: dict, chased_distance: float = 0) -> bool:
     return safe_float(chased_distance) < safe_float(cfg_get("combat.chase_max_distance", 400), 400)
 
 
-def scale_coords(x, y) -> tuple:
+def scale_coords(x, y) -> tuple[float, float]:
     """感知源坐标系 → 逻辑屏坐标换算（ROADMAP #19）。
 
     档案声明 perception.source_w/h（感知后端上报坐标所用分辨率）且与
@@ -1580,7 +1636,7 @@ def scale_coords(x, y) -> tuple:
     return x, y
 
 
-def clamp_to_safe_zone(x, y, screen_w=None, screen_h=None, margin=None) -> tuple:
+def clamp_to_safe_zone(x, y, screen_w=None, screen_h=None, margin=None) -> tuple[float, float]:
     """把走位点限制在安全区内，防止贴墙贴角卡死。"""
     sw = safe_float(screen_w if screen_w is not None else cfg_get("combat.safe_zone_w", 1920), 1920)
     sh = safe_float(screen_h if screen_h is not None else cfg_get("combat.safe_zone_h", 1080), 1080)
@@ -1594,7 +1650,7 @@ def clamp_to_safe_zone(x, y, screen_w=None, screen_h=None, margin=None) -> tuple
     return round(axis(x, sw), 1), round(axis(y, sh), 1)
 
 
-def apply_jitter(x, y) -> tuple:
+def apply_jitter(x, y) -> tuple[float, float]:
     """拟人抖动：小范围随机 + 15% 概率来一次稍大的。"""
     base = safe_float(cfg_get("combat.jitter_base", 8), 8)
     big = safe_float(cfg_get("combat.jitter_max", 15), 15)
@@ -1835,7 +1891,7 @@ def _with_condition(tactic: str) -> str:
     return f"{tactic}（{cond}）"
 
 
-def seed_knowledge(game: str = None, force: bool = False) -> list:
+def seed_knowledge(game: str | None = None, force: bool = False) -> list:
     """按游戏档案补种 seed 知识到 knowledge_md/<game>/（已存在则不覆盖）。"""
     g = safe_name(game or active_game()) or "default"
     prof = _read_yaml(os.path.join(PROFILE_DIR, f"{g}.yaml"))
@@ -2016,7 +2072,7 @@ def _parse_yolo_output(
     if not mask.any():
         return []
     sx, sy = src_w / float(size), src_h / float(size)
-    boxes = []
+    boxes: list = []
     for i in np.flatnonzero(mask):
         cx, cy, w, h = (float(v) for v in arr[:4, i])
         idx = int(cls[i])
@@ -2033,7 +2089,7 @@ def _parse_yolo_output(
             }
         )
     boxes.sort(key=lambda b: -b["conf"])
-    kept = []
+    kept: list = []
     for b in boxes:
         if all(
             _iou_c(b["cx"], b["cy"], b["w"], b["h"], k["cx"], k["cy"], k["w"], k["h"]) < 0.4 for k in kept
@@ -2099,7 +2155,7 @@ class Perception:
             return "mock"
         return b
 
-    def _mock_frame(self) -> dict:
+    def _mock_frame(self) -> FramePayload:
         drift = bool(self._mock.get("drift", True))
         dt = 1.0 / 30.0
         ents = []
@@ -2129,7 +2185,7 @@ class Perception:
             "_fallback": "mock",
         }
 
-    def _http_frame(self) -> dict:
+    def _http_frame(self) -> FramePayload:
         try:
             import requests
         except ImportError:
@@ -2163,7 +2219,7 @@ class Perception:
             Perception._ort_cache = {"key": key, "sess": sess}
         return sess
 
-    def _local_frame(self) -> dict:
+    def _local_frame(self) -> FramePayload:
         """local 后端：mss 抓屏 + ONNX Runtime 本地推理（YOLOv8 导出格式）。"""
         model_path = str(cfg_get("perception.local.model_path", "") or "").strip()
         if not model_path:
@@ -2206,7 +2262,7 @@ class Perception:
             "_fallback": "local",
         }
 
-    def _template_frame(self) -> dict:
+    def _template_frame(self) -> FramePayload:
         """template 后端：OpenCV 模板匹配。模板目录里每个 <label>.png 一类实体。
 
         调试可用 perception.template.source_image 指定截图文件代替实时抓屏。
@@ -2244,7 +2300,7 @@ class Perception:
                 continue
             res = cv2.matchTemplate(img, tpl, cv2.TM_CCOEFF_NORMED)
             locs = np.argwhere(res >= th)
-            kept = []
+            kept: list = []
             for ty, tx in locs:
                 cx, cy = float(tx) + tpl.shape[1] / 2, float(ty) + tpl.shape[0] / 2
                 w, h = float(tpl.shape[1]), float(tpl.shape[0])
@@ -2267,7 +2323,7 @@ class Perception:
             "_fallback": "template",
         }
 
-    def frame(self) -> dict:
+    def frame(self) -> FramePayload:
         b = self.backend()
         if b == "http":
             return self._http_frame()
@@ -2277,7 +2333,7 @@ class Perception:
             return self._template_frame()
         return self._mock_frame()
 
-    def perceive(self) -> dict:
+    def perceive(self) -> FramePayload:
         """取一帧并自动喂给预判模块（= 原 perceive_game）。"""
         data = self.frame()
         if "error" not in data:
@@ -2608,7 +2664,7 @@ def _read_json(path: str, default):
 # ===========================================================================
 # 9. 复盘 & BOSS 记忆
 # ===========================================================================
-def should_review(state: dict) -> bool:
+def should_review(state: FramePayload) -> bool:
     """复盘触发判定（ROADMAP #15）：开关与触发条件全部下放配置/游戏档案。
 
     - review.enabled=false 时全关
@@ -2640,11 +2696,12 @@ DEFAULT_REVIEW_TEMPLATE = (
 )
 
 
-def review_round(survived: bool, note: str, state: dict) -> str:
+def review_round(survived: bool, note: str, state: FramePayload) -> str:
     """生成复盘并写入知识库（ROADMAP #15：模板可配置 + 结构化字段便于死因统计）。"""
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     outcome = "存活" if survived else "死亡"
-    player = state.get("player") if isinstance(state.get("player"), dict) else {}
+    _praw = state.get("player")
+    player = _praw if isinstance(_praw, dict) else {}
     set_info = player.get("petal_set", "未知")
     ents = [e for e in (state.get("entities") or []) if isinstance(e, dict)]
     monster = "、".join(f"{e.get('raw_id', '?')}({e.get('rarity', '?')})" for e in ents[:5]) or "未知"
@@ -3130,7 +3187,7 @@ def vlm_extract_tactic(b64_img: str) -> str:
     try:
         import requests
 
-        payload = {
+        payload: dict = {
             "model": os.getenv("VLM_MODEL", ""),
             "messages": [
                 {
@@ -3219,7 +3276,7 @@ def _png_to_rgb(path: str):
         elif tag == b"IEND":
             break
         pos += 12 + ln
-    if w is None or not idat:
+    if w is None or h is None or not idat:
         raise ValueError("broken PNG")
     raw = zlib.decompress(b"".join(idat))
     bpp = 3 if ctype == 2 else 4
@@ -3322,7 +3379,9 @@ def _dedup_frames(paths: list) -> tuple:
     if not bool(cfg_get("learn.hash_dedup", True)):
         return list(paths), 0
     threshold = safe_int(cfg_get("learn.hash_threshold", 5), 5)
-    kept, hashes, skipped = [], [], 0
+    kept: list = []
+    hashes: list = []
+    skipped = 0
     for p in paths:
         h = _avg_hash(p)
         if h is None:  # 解码不了 → 保守保留
@@ -3339,7 +3398,7 @@ def _dedup_frames(paths: list) -> tuple:
 def _vote_tactics(tactics: list, min_votes: int = 2) -> list:
     """ROADMAP #14：多帧投票。相似战术（ratio≥0.75）归组，票数达标才入库；
     代表句取组内最长一条（信息量最大）。min_votes=1 等价于关闭投票。"""
-    groups = []  # [票数, 代表句]
+    groups: list = []  # [票数, 代表句]
     for t in tactics:
         t = str(t or "").strip()
         if not _useful_tactic(t):
@@ -3359,7 +3418,7 @@ def _vote_tactics(tactics: list, min_votes: int = 2) -> list:
 
 
 def learn_from_video(
-    video_path: str = None, frame_count: int = 5, skip: int = 25, cleanup: bool = True
+    video_path: str | None = None, frame_count: int = 5, skip: int = 25, cleanup: bool = True
 ) -> dict:
     """一次完整学习（ROADMAP #14）：抽帧 → 哈希跳重复 → 逐帧 VLM → 多帧投票
     → 历史去重 → 入库 → 清理临时帧。"""
@@ -3470,7 +3529,7 @@ def _llm_extract_json(content: str):
     return json.loads(content)
 
 
-def _validate_action(obj) -> tuple:
+def _validate_action(obj) -> tuple[ActionDict | None, str]:
     """ROADMAP #8：LLM 动作 JSON 的 schema 校验与清洗。
 
     返回 (合法动作 dict | None, 错误说明)：
@@ -3483,11 +3542,13 @@ def _validate_action(obj) -> tuple:
     action = str(obj.get("action") or "").strip().lower()
     if action not in VALID_ACTIONS:
         return None, f"action 必须是 {'/'.join(VALID_ACTIONS)} 之一，收到 {action!r}"
-    out = {"action": action, "source": "llm"}
+    out: ActionDict = {"action": action, "source": "llm"}
     if action == "move":
         x, y = obj.get("x"), obj.get("y")
         if isinstance(x, bool) or isinstance(y, bool):
             return None, f"move 的 x/y 必须是数字而非布尔（x={x!r} y={y!r}）"
+        if x is None or y is None:
+            return None, f"move 需要数值 x/y（x={x!r} y={y!r}）"
         try:
             xf, yf = float(x), float(y)
         except (TypeError, ValueError):
@@ -3498,7 +3559,9 @@ def _validate_action(obj) -> tuple:
     return out, ""
 
 
-def llm_decide(state: dict, predictions: list, combat_eval: dict, kb_text: str) -> dict:
+def llm_decide(
+    state: FramePayload, predictions: list, combat_eval: dict, kb_text: str
+) -> ActionDict:
     """LLM 决策（ROADMAP #5/#8）：传输层重试 + schema 校验 + 一次修复重试 + 规则兜底。
 
     - prompt 可被游戏档案 llm.system_prompt 覆盖
@@ -3531,7 +3594,7 @@ def llm_decide(state: dict, predictions: list, combat_eval: dict, kb_text: str) 
     timeout = safe_float(cfg_get("resilience.llm.timeout", 15), 15)
 
     def _call(msgs):
-        payload = {
+        payload: dict = {
             "model": os.getenv("LLM_MODEL", ""),
             "messages": msgs,
             "max_tokens": safe_int(cfg_get("llm.max_tokens", 800), 800),
@@ -3580,12 +3643,15 @@ def llm_decide(state: dict, predictions: list, combat_eval: dict, kb_text: str) 
     return fallback_decide(state, combat_eval, kb_text)
 
 
-def fallback_decide(state: dict, combat_eval: dict, kb_text: str = "") -> dict:
+def fallback_decide(
+    state: FramePayload, combat_eval: dict, kb_text: str = ""
+) -> ActionDict:
     """无 LLM 时的规则兜底 —— 命中知识会真正改变动作（闭环最后一段）。"""
     if state.get("afk_popup"):
         return {"action": "idle", "source": "rule"}
     decision = combat_eval.get("decision", "fight")
-    player = state.get("player") if isinstance(state.get("player"), dict) else {}
+    _praw = state.get("player")
+    player = _praw if isinstance(_praw, dict) else {}
     hp = safe_float(player.get("hp"))
     max_hp = max(1.0, safe_float(player.get("max_hp"), 100))
     hp_ratio = hp / max_hp
@@ -3611,12 +3677,14 @@ def fallback_decide(state: dict, combat_eval: dict, kb_text: str = "") -> dict:
 LEARNING_STATS = LearningStats()
 
 
-def _autopilot_action(state: dict, predictions: list, ev: dict, kb_text: str) -> dict:
+def _autopilot_action(
+    state: FramePayload, predictions: list, ev: dict, kb_text: str
+) -> ActionDict:
     """选动作：优先让 LLM 决策，没密钥就走规则。"""
     return llm_decide(state, predictions, ev, kb_text)
 
 
-def run_agent(max_rounds: int = 0, interval: float = None) -> dict:
+def run_agent(max_rounds: int = 0, interval: float | None = None) -> dict:
     """主循环：感知 → 预判 → 评估 → 知识 → 决策 → 动作 → 记忆 → 复盘 → 汇报。"""
     interval = safe_float(interval if interval is not None else cfg_get("agent.loop_interval", 0.5), 0.5)
     game = active_game()
@@ -3651,8 +3719,9 @@ def run_agent(max_rounds: int = 0, interval: float = None) -> dict:
     skipped = 0
     action_counts: dict = {}
     current_set = str(cfg_get("combat.default_set", "combat"))
-    state: dict = {}
-    boss_obs, boss_samples = [], {}
+    state: FramePayload = {}
+    boss_obs: list = []
+    boss_samples: dict = {}
     learn_buf: list = []
     deaths_cycle = 0
     last_boss_memory = 0.0
@@ -3693,7 +3762,8 @@ def run_agent(max_rounds: int = 0, interval: float = None) -> dict:
                 time.sleep(interval)
                 continue
 
-            player = state.get("player") if isinstance(state.get("player"), dict) else {}
+            _praw = state.get("player")
+            player = _praw if isinstance(_praw, dict) else {}
 
             # 2. 死亡防抖
             if not player.get("alive", True):
@@ -3926,20 +3996,22 @@ def profile_check_one(game: str) -> list:
     port = (prof.get("server") or {}).get("perception_port")
     if port is None:
         _pc_issue(issues, "WARN", "server.perception_port", "缺失，将回落 config.yaml 默认端口")
-    elif not isinstance(port, int) or isinstance(port, bool) or not (1024 <= port <= 65535):
+    elif not isinstance(port, int) or isinstance(port, bool):
+        _pc_issue(issues, "ERROR", "server.perception_port", f"必须为 1024~65535 的整数，当前: {port!r}")
+    elif not 1024 <= port <= 65535:
         _pc_issue(issues, "ERROR", "server.perception_port", f"必须为 1024~65535 的整数，当前: {port!r}")
 
     # 三、稀有度档位与威胁金字塔
     pred = prof.get("predictor") or {}
-    tiers = {}
+    tiers: dict = {}
     for key in ("rarity_highest_boss", "rarity_boss", "rarity_elite", "rarity_normal"):
         vals = pred.get(key)
-        if not isinstance(vals, list) or not vals or not all(isinstance(v, str) and v.strip() for v in vals):
+        if isinstance(vals, list) and vals and all(isinstance(v, str) and v.strip() for v in vals):
+            tiers[key] = [v.strip().capitalize() for v in vals]
+        else:
             _pc_issue(issues, "ERROR", f"predictor.{key}", "必须为非空字符串列表")
             tiers[key] = []
-        else:
-            tiers[key] = [v.strip().capitalize() for v in vals]
-    seen_pairs = {}
+    seen_pairs: dict = {}
     for key, vals in tiers.items():
         for v in vals:
             if v in seen_pairs:
@@ -3961,11 +4033,11 @@ def profile_check_one(game: str) -> list:
             _pc_issue(issues, "ERROR", f"predictor.threat.{k}", "缺失（必填）")
         elif not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0:
             _pc_issue(issues, "ERROR", f"predictor.threat.{k}", f"必须为 >=0 的数字，当前: {v!r}")
-    nums = {
-        k: threat.get(k)
-        for k in THREAT_KEYS
-        if isinstance(threat.get(k), (int, float)) and not isinstance(threat.get(k), bool)
-    }
+    nums: dict = {}
+    for k in THREAT_KEYS:
+        v = threat.get(k)
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            nums[k] = float(v)
     chain = [k for k in ("highest_boss", "boss", "elite", "normal") if k in nums]
     for a, b in zip(chain, chain[1:], strict=False):
         if nums[a] < nums[b]:
@@ -3980,13 +4052,16 @@ def profile_check_one(game: str) -> list:
 
     # 四、战斗配置
     combat = prof.get("combat") or {}
-    sets = combat.get("sets")
-    ok_sets = isinstance(sets, list) and sets and all(isinstance(s, str) and s.strip() for s in sets)
-    if not ok_sets:
+    sets_raw = combat.get("sets")
+    if (
+        isinstance(sets_raw, list)
+        and sets_raw
+        and all(isinstance(x, str) and x.strip() for x in sets_raw)
+    ):
+        sets = [str(x).strip().lower() for x in sets_raw]
+    else:
         _pc_issue(issues, "ERROR", "combat.sets", "必须为非空字符串列表（游戏内真实套装名）")
         sets = []
-    else:
-        sets = [s.strip().lower() for s in sets]
     default_set = str(combat.get("default_set") or "").strip().lower()
     if not default_set:
         _pc_issue(issues, "ERROR", "combat.default_set", "缺失（必填，运行时换套会落到未知套装）")
@@ -4228,7 +4303,7 @@ def start_panel_server(host: str = "127.0.0.1", port: int = 0):
     return srv, srv.server_address[1]
 
 
-def run_panel(host: str = "127.0.0.1", port: int = None):
+def run_panel(host: str = "127.0.0.1", port: int | None = None):
     """阻塞式启动面板（CLI `agent.py panel`）。与主循环完全解耦：
     面板只读 run_logs/agent_snapshot.json 等落盘产物，agent 不在跑也能打开。"""
     if port is None:
@@ -4377,7 +4452,7 @@ def selftest(max_rounds: int = 12) -> int:
     check("知识可影响决策", act in ("defend", "attack", ""))
 
     log("== 自检 4/6 复盘 + BOSS 记忆 ==")
-    state = {
+    state: FramePayload = {
         "player": {"petal_set": "combat"},
         "entities": [{"raw_id": "mantis", "rarity": "Super"}],
         "teammates": [],

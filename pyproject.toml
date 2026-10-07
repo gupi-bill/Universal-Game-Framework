@@ -56,3 +56,11 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["B011"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+check_untyped_defs = false
+disallow_untyped_defs = false
+warn_unused_ignores = false
+# ROADMAP #4 第一阶段：宽松档进 CI 不阻断；核心链路注解齐后逐步收紧到阻断

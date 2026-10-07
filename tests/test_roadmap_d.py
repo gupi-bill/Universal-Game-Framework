@@ -196,3 +196,18 @@ def test_panel_state_zero_side_effect(tmp_path, monkeypatch):
     monkeypatch.setattr(agent, "SNAP_FILE", str(tmp_path / "nonexistent.json"))
     d = agent._panel_state()
     assert d["snapshot"] == {} and isinstance(d["events"], list)
+
+
+# ---------------------------------------------------------------------------
+# #4 类型化
+# ---------------------------------------------------------------------------
+def test_core_types_exist_and_annotated():
+    import typing
+
+    for name in ("FramePayload", "EntityPred", "CombatEval", "ActionDict"):
+        td = getattr(agent, name)
+        assert issubclass(td, dict), f"{name} 应为 TypedDict"
+    hints = typing.get_type_hints(agent.judge_combat)
+    assert "CombatEval" in str(hints["return"])
+    hints = typing.get_type_hints(agent.llm_decide)
+    assert "ActionDict" in str(hints["return"])
