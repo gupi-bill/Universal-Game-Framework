@@ -106,6 +106,8 @@ def test_kb_history_revisions_cap(tmp_path, monkeypatch):
 
 def test_kb_history_cli(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(agent, "KB_DIR", str(tmp_path))
+    # main(["--game", ...]) 会写 os.environ["AGENT_GAME"]，先经 monkeypatch 记录原值保证 teardown 还原
+    monkeypatch.setenv("AGENT_GAME", os.environ.get("AGENT_GAME", ""))
     agent.kb_write("t4", "x", "g4")
     agent.kb_write("t4", "y", "g4")
     assert agent.main(["--game", "g4", "kb", "history", "t4"]) == 0

@@ -24,8 +24,10 @@ GUIDE = """# Universal-Game-Framework · 单文件游戏 Agent 使用手册
     kb       知识库：list / search / write / append / export / import / boss / tactic / clean
     learn    视频学习：learn video.mp4 或 learn --url <链接> --frames 5
     report   生成一份对局报告（写 run_logs/，可选 Webhook）
+    doctor   环境体检：依赖/目录/档案/感知/密钥，✓⚠✗ 清单（致命项退出码 1）
+    bench    性能基准：--rounds N，分段计时 感知/预判/评估/决策/动作
     panel    本地监控面板（纯标准库，只读快照/事件/日志，Ctrl+C 停止）
-    logs     查看运行日志：--tail N / --grep KW / --events --kind decision
+    logs     查看运行日志：--tail N / --grep KW / --events --kind decision / --stats
     session  看会话记忆与历史战绩
     tune     自动调参：tune --status / tune --reset
     selftest 离线自检：不碰键鼠、不用密钥，跑通全链路并断言关键产物
@@ -262,6 +264,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--grep", default="", help="按关键词过滤")
     sp.add_argument("--events", action="store_true", help="看结构化事件流（JSONL）")
     sp.add_argument("--kind", default="", help="事件类型过滤：decision/death/tune/learn/session_end")
+    sp.add_argument("--stats", action="store_true", help="事件流聚合统计（ROADMAP v2 #3）")
+
+    sp = sub.add_parser("doctor", help="环境体检（依赖/目录/档案/感知/密钥）")
+    sp.add_argument("game", nargs="?", default="", help="体检指定游戏档案（缺省=当前）")
+
+    sp = sub.add_parser("bench", help="分段耗时基准（mock+dry-run，规则决策）")
+    sp.add_argument("--rounds", type=int, default=200, help="基准回合数（默认 200）")
     return ap
 
 
@@ -325,8 +334,14 @@ def main(argv=None) -> int:
         return profile_check(args.game, check_all=args.all, strict=args.strict)
     elif cmd == "panel":
         run_panel(args.host, args.port)
+    elif cmd == "doctor":
+        return doctor(args.game)
+    elif cmd == "bench":
+        return bench(args.rounds)
     elif cmd == "logs":
-        if args.events:
+        if args.stats:
+            print(event_stats(args.kind))
+        elif args.events:
             for e in read_events(args.tail, args.kind):
                 print(json.dumps(e, ensure_ascii=False))
         else:
