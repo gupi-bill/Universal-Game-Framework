@@ -1,0 +1,36 @@
+# ROADMAP #22：打 tag 自动构建 zipapp 并上传 Release
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 构建 zipapp
+        run: python build.py pyz
+
+      - name: 冒烟自检（隔离 UGF_HOME）
+        run: python build.py check
+
+      - name: 生成校验和（ROADMAP v2 #18）
+        run: cd dist && sha256sum ugf.pyz > SHA256SUMS.txt && cat SHA256SUMS.txt
+
+      - name: 上传 Release 附件
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/ugf.pyz
+            dist/SHA256SUMS.txt

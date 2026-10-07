@@ -1,0 +1,44 @@
+# ROADMAP v2 #18：PyPI 发布骨架（仅手动触发，防止误发）
+#
+# 首次发布前置步骤：
+#   1. 在 https://pypi.org 注册项目名 universal-game-framework
+#   2. 项目设置 → Trusted Publishing → 添加本仓库（workflow: pypi-publish.yml, env: pypi）
+#   3. Actions 页手动 Run workflow；无需任何长期 API token
+name: Publish to PyPI
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: 构建 sdist + wheel
+        run: |
+          pip install build
+          python -m build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pypi-dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write  # PyPI Trusted Publishing（OIDC）
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: pypi-dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

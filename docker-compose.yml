@@ -1,0 +1,40 @@
+# Universal-Game-Framework 容器编排示例（ROADMAP #23）
+#
+# 用法：
+#   docker compose up agent              # 离线 dry-run 跑 60 回合演示
+#   docker compose run --rm agent selftest   # 一次性自检
+#   docker compose run --rm agent run    # 真机模式（需挂 .env 与感知服务，见下）
+#
+# 接真实感知服务时：取消 perception 注释，并把 agent 的环境变量改为
+#   UGF_DRY_RUN: "0"
+#   UGF_PERCEPTION_BACKEND: http
+#   UGF_PERCEPTION_URL: http://perception:5001/perceive
+
+services:
+  agent:
+    build: .
+    image: ugf-agent
+    environment:
+      UGF_DRY_RUN: "1"
+      UGF_PERCEPTION_BACKEND: mock
+      UGF_HOME: /data
+    volumes:
+      - ugf-data:/data
+      # 接入 LLM/VLM/Webhook 时挂载密钥文件（不入库）：
+      # - ./.env:/app/.env:ro
+    command: ["python", "agent.py", "run", "--dry-run", "--rounds", "60"]
+    healthcheck:
+      test: ["CMD", "python", "agent.py", "mode"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+
+  # 真实感知服务示例位（自行实现 /perceive 返回标准 payload：
+  # {"player":{...},"entities":[{raw_id,rarity,x,y}],"teammates":[],"afk_popup":false}）
+  # perception:
+  #   image: your-perception-service:latest
+  #   ports:
+  #     - "5001:5001"
+
+volumes:
+  ugf-data:

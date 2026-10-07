@@ -1,0 +1,41 @@
+name: Bug 报告
+description: 功能不符合预期、崩溃或数据异常
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 发生了什么
+      placeholder: 期望行为 vs 实际行为
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. python agent.py run --dry-run ...
+        2. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: 版本（python agent.py --version）
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: 操作系统
+      options: [Windows, macOS, Linux, 其他]
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: 环境体检输出（python agent.py doctor）
+  - type: textarea
+    id: logs
+    attributes:
+      label: 相关日志（agent.py logs --tail 50）

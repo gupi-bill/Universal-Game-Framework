@@ -1,4 +1,4 @@
-# FlorrVLM-Agent 游戏档案 florr.yaml
+# Universal-Game-Framework 游戏档案 florr.yaml
 # ====================================
 # v0.9 —— 每个游戏一份档案。核心模块(predictor/combat_judge/agent_main)只认这些
 # 键的语义，不认具体游戏名。切换游戏 = 设 AGENT_GAME 指向另一份档案，核心零改动。
@@ -28,5 +28,48 @@ predictor:
     player_ally: 0
     unknown: 5
 
+# 感知端口：每款游戏一个端口，多游戏并行时不会都挤在 5001
+#（florr 用默认 5001；space_invaders 用 5011）
+server:
+  perception_port: 5001
+
 combat:
   chase_min_category: elite      # 追击套最低怪物档次（默认取本档案的高价值怪）
+  default_set: combat            # 必须出现在下面的 sets 里
+  # 套装清单：与 combat_judge 的 recommended_set、mcp_server.switch_set 的键位映射
+  #（combat→1 / tank→2 / retreat→3 / chase→4 / team→5）保持同名，否则换套会落到「未知套装」
+  sets:
+    - combat                     # 常规输出
+    - tank                       # 高威胁缠斗，保命优先
+    - retreat                    # 逃生跑图
+    - chase                      # 追击高价值怪
+    - team                       # 组队辅助
+  # 战术模板（会写进知识库，供决策时检索引用）
+  tactics:
+    - "低血量且附近有 Ultra 及以上怪物时立即切 retreat，不要恋战"
+    - "Unique/Eternal 级 BOSS 出现即避战，等其转移或队友吸引仇恨后再回场"
+    - "Mythic/Legendary 在血量充足且距离安全时可主动 chase，注意留一个位移技能"
+    - "组队时优先保护队友输出位，team 套的收益高于个人击杀数"
+# 离线 / mock 感知数据（v2.0 S15：从 config.yaml 迁回档案，实现"一份档案一份离线场景"）
+# 无 YOLO、无真机时用于跑通全链路；rarity 必须落在上面已声明的档位里。
+perception:
+  mock:
+    drift: true                  # 实体按 vx/vy 随时间移动，供 predictor 累积多帧
+    afk_popup: false
+    player:
+      alive: true
+      hp: 100
+      max_hp: 100
+      x: 960
+      y: 540
+      power_score: 120
+      petal_set: combat
+      talent: none
+    entities:
+      - {raw_id: hornet,     rarity: Common,  x: 400,  y: 300, vx: 80,  vy: 0}
+      - {raw_id: ladybug,    rarity: Unusual, x: 700,  y: 420, vx: -60, vy: 40}
+      - {raw_id: centipede,  rarity: Rare,    x: 1200, y: 600, vx: 0,   vy: -50}
+      - {raw_id: beetle,     rarity: Epic,    x: 1500, y: 350, vx: -30, vy: -30}
+      - {raw_id: mantis,     rarity: Super,   x: 1700, y: 800, vx: 0,   vy: 0}
+    teammates:
+      - {raw_id: player_ally, petal_set: support, x: 900, y: 500}

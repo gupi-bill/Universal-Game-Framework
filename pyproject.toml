@@ -1,0 +1,69 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "universal-game-framework"
+version = "3.2.0"
+description = "单文件游戏 Agent：自己看画面、预判、决策、动作、复盘、学习"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "gupi-bill" }]
+keywords = ["agent", "game", "automation", "single-file"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+# 只声明真实运行建议装的轻依赖；其余全是可选（见可选依赖）。
+# 离线 dry-run 全链路不需要任何第三方库。
+dependencies = [
+    "pyyaml>=6.0.0",
+    "requests>=2.31.0",
+]
+
+[project.optional-dependencies]
+# 真机键鼠控制；无头环境别装。
+input = ["pyautogui>=0.9.54"]
+# 本地视频抽帧。
+vision = ["opencv-python-headless>=4.8.0"]
+
+[project.urls]
+Homepage = "https://github.com/gupi-bill/Universal-Game-Framework"
+Issues = "https://github.com/gupi-bill/Universal-Game-Framework/issues"
+
+# 装好后一条命令就能跑：ugf run --dry-run --rounds 20
+[project.scripts]
+ugf = "agent:main"
+
+[tool.setuptools]
+py-modules = ["agent"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+# src/ugf/ 是 agent.py 的构建分片（ROADMAP #2）：内容整体参与 lint（以 agent.py 为准），
+# 分片单独解析会产生跨文件未定义名误报，故排除
+extend-exclude = ["src/ugf"]
+
+[tool.ruff.lint]
+# 项目规则集：pyflakes + pycodestyle + bugbear + simplify + comprehension + pyupgrade
+select = ["E", "F", "W", "B", "SIM", "C4", "UP"]
+ignore = [
+    "E501",   # 行宽交给 ruff format 处理
+    "SIM108", # 三元表达式不强制（可读性优先）
+    "B008",   # 函数调用默认值（argparse 场景无副作用）
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+check_untyped_defs = false
+disallow_untyped_defs = false
+warn_unused_ignores = false
+# ROADMAP #4 第一阶段：宽松档进 CI 不阻断；核心链路注解齐后逐步收紧到阻断

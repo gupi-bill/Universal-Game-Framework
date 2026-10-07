@@ -1,11 +1,17 @@
-# FlorrVLM-Agent 依赖
-flask>=3.0.0
-requests>=2.31.0
-pyautogui>=0.9.54
-pillow>=10.0.0
-opencv-python>=4.8.0
-numpy>=1.24.0
-python-dotenv>=1.0.0
-pyyaml>=6.0.0
-psutil>=5.9.0      # 可选：监控大盘的 CPU 占用显示
-mcp>=1.0.0
+# Universal-Game-Framework 依赖（单文件 Agent 版）
+#
+# 关键点：离线 dry-run 全链路（感知 mock + 预判 + 评估 + 决策 + 复盘 + 汇报）
+# 不需要任何第三方库，只用 Python 标准库即可跑。
+#
+# 安装：
+#   pip install -r requirements.txt          # 推荐（含真实运行所需）
+#   pip install pyyaml requests              # 最小安装，与下面 core 段等价
+
+# ---------- core · 真实运行建议装（缺失也能跑，只是能力降级） ----------
+pyyaml>=6.0.0               # 读 config.yaml / game_profiles/*.yaml（缺失则只用内置默认值）
+requests>=2.31.0            # Webhook 汇报 / LLM 决策 / VLM 视频学习（缺失则这些功能自动跳过）
+
+# ---------- optional · 真机（有显示器 + X server）才需要 ----------
+# 无头 / 服务器环境不要装，装了也会自动走 dry-run 分支。
+# pyautogui>=0.9.54         # 真实键鼠控制
+# opencv-python-headless>=4.8.0   # 本地视频抽帧（learn 命令读视频文件时用）

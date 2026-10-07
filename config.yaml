@@ -1,4 +1,4 @@
-# FlorrVLM-Agent 全局配置 config.yaml
+# Universal-Game-Framework 全局配置 config.yaml
 # 所有阈值/路径集中在这里，改参数不用改源码。
 # 改完保存即热加载生效（agent_main 每轮会检测文件变化）。
 # 这些是 Florr 专属部分：1.0 之后整份可作为第一张"游戏档案"抽走。
@@ -7,6 +7,35 @@ server:
   perception_port: 5001        # 感知服务端口
   panel_port: 5002             # 本地面板端口
 
+perception:
+  # 感知后端（ROADMAP #6 插件化，四选一）：
+  # backend: auto     = dry-run 走 mock，否则走 http
+  #          mock     = 直接返回配置里的合成场景（无截图、无YOLO、无显卡）
+  #          http     = 接外部检测服务（不可用时返回明确错误而非崩溃）
+  #          local    = mss 抓屏 + ONNX Runtime 本地推理（YOLOv8 导出的 .onnx，
+  #                     需 pip install mss numpy onnxruntime opencv-python-headless）
+  #          template = OpenCV 模板匹配（模板目录每类实体一张 <label>.png，零模型，
+  #                     需 pip install opencv-python-headless numpy mss）
+  # 环境变量 UGF_PERCEPTION_BACKEND=mock|http|local|template|auto 优先级高于此处
+  backend: auto
+  capture_region: ""           # local/template 抓屏区域："x,y,w,h" 简写或 mss dict；空=全屏（ROADMAP v2 #8）
+  source_w: 0                  # 感知后端坐标系宽（0=与逻辑屏一致不缩放；ROADMAP #19）
+  source_h: 0                  # 感知后端坐标系高
+  # ---- local 后端（ROADMAP #6）----
+  local:
+    model_path: ""             # YOLOv8 导出的 .onnx 路径
+    input_size: 640            # 推理输入边长
+    conf: 0.5                  # 置信度阈值
+    labels: []                 # 类别索引→名称，空则用 class_<idx>
+    rarity_map: {}             # 名称→稀有度档（如 {hornet: Common}）
+  # ---- template 后端（ROADMAP #6）----
+  template:
+    dir: ""                    # 模板目录，每个 <label>.png 一类实体
+    conf: 0.8                  # matchTemplate 阈值
+    rarity_map: {}             # 名称→稀有度档
+    source_image: ""           # 调试用：指定截图文件代替实时抓屏
+  # v2.0 S15：离线场景已迁回各游戏档案（game_profiles/<game>.yaml 的 perception.mock）。
+  # 此处不再维护 mock 数据；未声明时回退 config.py 的 DEFAULT（florr 场景）。
 predictor:
   predict_seconds: 1.2         # 预判未来秒数
   min_frames: 3                # 至少多少帧才算速度
@@ -14,10 +43,24 @@ predictor:
   max_output_entities: 8       # 最多输出前 N 个威胁最高实体
   history_maxlen: 10           # 每个实体保留帧数
   confidence_threshold: 0.65   # 置信度阈值锁
+  # 置信度曲线（v2.0 从源码提到配置层）
+  frame_full_frames: 8         # 攒够多少帧，帧数置信度打满
+  speed_ref: 2000              # 速度惩罚参考值(px/s)，到该速度惩罚触底
+  speed_penalty_floor: 0.3     # 速度惩罚下限
+  jitter_floor: 0.35           # 抖动惩罚下限（轨迹越绕，置信越低）
+  match_max_dist: 400          # 实体匹配距离上限，超过宁开新轨不误挂（ROADMAP #9）
+  # ROADMAP #7：预判模型 auto=按一步回测残差自动选优；也可强制 linear/accel/circular
+  model: auto
+  accel_max: 2000              # 恒加速度模型的加速度钳制(px/s²)
+  circular_min_frames: 8       # 圆周检测最少帧数
+  circular_min_radius: 20      # 低于该半径不算绕圈(px)
+  circular_min_omega: 0.3      # 低于该角速度不算绕圈(rad/s)
+  # 稀有度体系（Florr.io 原生，按游戏可换）
   rarity_highest_boss: ["Unique", "Eternal"]
   rarity_boss: ["Super"]
   rarity_elite: ["Ultra", "Mythic", "Legendary", "Epic"]
   rarity_normal: ["Rare", "Unusual", "Common"]
+  # 分类 -> 威胁分数
   threat:
     highest_boss: 1000
     boss: 400
@@ -28,43 +71,74 @@ predictor:
     unknown: 5
 
 combat:
-  eval_debounce_interval: 0.7
-  jitter_base: 8
-  jitter_max: 15
-  chase_max_distance: 400
-  chase_min_category: elite
-  safe_zone_margin: 100
+  eval_debounce_interval: 0.7  # 实力评估防抖秒数
+  jitter_base: 8               # 移动抖动基础像素
+  jitter_max: 15               # 移动抖动最大像素
+  chase_max_distance: 400      # 追杀最远像素
+  chase_min_category: elite    # 追击套最低怪物档次
+  safe_zone_margin: 100        # 安全区屏幕边缘边距
   safe_zone_w: 1920
   safe_zone_h: 1080
+  # v2.0：避险走位两段距离（原先硬编码在 combat_judge.calc_retreat_position 内）
+  flee_distance: 300           # 实力不足时，往反方向撤离的像素距离
+  strafe_distance: 150         # 实力可周旋时，侧向绕行的像素距离
 
 agent:
-  game: florr
-  use_ai: true                # true=调 LLM/VLM API 决策; false=纯本地规则决策(离线免费)
-  loop_interval: 0.5
-  webhook_url: ""
-  death_frame_threshold: 8
-  boss_memory_interval: 12
-  boss_sample_max: 120
-  boss_close_dist: 120
-  learning_stats_interval: 24
-  report_every: 0
+  game: florr                # 当前激活的游戏档案(game_profiles/<name>.yaml)
+  loop_interval: 0.5           # 主循环间隔秒
+  webhook_url: ""             # v1.2 报告推送地址(留空只写本地文件)
+  death_frame_threshold: 8     # 连续死亡帧阈值
+  boss_memory_interval: 12     # BOSS 记忆写入间隔秒
+  boss_sample_max: 120         # 每种 BOSS 最大样本数
+  boss_close_dist: 120         # BOSS 接近判定像素
+  learning_stats_interval: 24  # 学习命中统计落盘轮数
+  report_every: 0              # v1.7 局中定时汇报间隔(轮数，0=关闭；>0 则每 N 轮上报一次进度)
+  tune_locked: []              # 人工锁定的参数（如 [combat.retreat_ratio]），调参跳过（ROADMAP #13）
+  checkpoint_interval: 30      # 每 N 回合落盘循环检查点，run --resume 可续跑（ROADMAP v2 #6，0=关）
 
-mcp:
-  streamable_http: false
-  streamable_port: 5050
+# ROADMAP #15：死亡复盘触发与模板（可按游戏档案覆盖）
+review:
+  enabled: true                # 复盘总开关
+  trigger_boss: true           # BOSS 局（稀有度档取自 predictor.rarity_boss/highest_boss）
+  trigger_team: true           # 组队局
+  template: ""                 # 自定义模板，占位符 {ts}{outcome}{monster}{set}{cause}{note}；空=内置
 
 paths:
-  knowledge_md: knowledge_md
-  frames: video_frames
-  run_logs: run_logs
+  knowledge_md: knowledge_md   # 知识库目录
+  frames: video_frames         # 视频抽帧临时目录
+  run_logs: run_logs           # 运行日志目录
+
+kb:
+  search_top_n: 5              # 检索返回 Top-N（ROADMAP #11：BM25 排序）
+  history_revisions: 20        # 每文件保留历史修订数（ROADMAP #12）
+  history_max_kb: 256          # 超过该大小的文件历史只记事件不存正文
 
 logs:
-  retention_days: 7
-  max_size_mb: 20
+  retention_days: 7            # 日志保留天数，超期删除
+  max_size_mb: 20              # 单个日志文件超过该大小 gzip 轮转（ROADMAP #16）
 
-resource:
-  enabled: true
-  check_interval: 30
-  mem_limit_mb: 500
-  cpu_limit_pct: 80
-  mem_hard_mb: 1000
+# ROADMAP #8：LLM 决策行为（密钥走 .env 的 LLM_API_URL / LLM_API_KEY / LLM_MODEL）
+llm:
+  system_prompt: ""            # 空=内置提示词；可按游戏覆盖决策人设与输出约束
+  max_tokens: 800              # 单次决策输出上限
+  temperature: 0.3             # 决策要稳，低温
+  vlm_prompt: ""               # 视频学习 VLM 提示词，空=内置（ROADMAP #14）
+
+learn:
+  hash_dedup: true             # 抽帧后感知哈希跳过近重复帧，省 VLM 调用（ROADMAP #14）
+  hash_threshold: 5            # 64bit 哈希汉明距离 ≤ 该值视为近重复
+  min_votes: 2                 # 同一战术需 ≥N 帧支持才入库（1=关闭投票）
+
+# ROADMAP #5：外部依赖统一降级链——失败重试 N 次（线性退避），仍失败才降级并留日志
+resilience:
+  perception:
+    retries: 2                 # http 感知失败重试次数（不含首次）
+    backoff: 1.0               # 退避基数秒：第 i 次失败后睡 backoff*i
+  webhook:
+    retries: 2
+    backoff: 1.0
+    timeout: 5                 # 单次推送超时秒
+  llm:
+    retries: 1                 # LLM 传输层错误重试（输出不合法的修复重试另计）
+    backoff: 0.5
+    timeout: 15

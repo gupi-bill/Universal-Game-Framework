@@ -1,0 +1,455 @@
+# ===========================================================================
+# 14. 主循环
+# ===========================================================================
+LEARNING_STATS = LearningStats()
+
+
+def _autopilot_action(state: FramePayload, predictions: list, ev: dict, kb_text: str) -> ActionDict:
+    """选动作：优先让 LLM 决策，没密钥就走规则。"""
+    return llm_decide(state, predictions, ev, kb_text)
+
+
+def _write_checkpoint(
+    path: str,
+    game: str,
+    rounds: int,
+    deaths: int,
+    set_switches: int,
+    deaths_cycle: int,
+    current_set: str,
+):
+    """ROADMAP v2 #6：主循环现场落盘，进程被杀后 run --resume 恢复。"""
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "schema_version": 1,
+                    "game": game,
+                    "rounds": rounds,
+                    "deaths": deaths,
+                    "set_switches": set_switches,
+                    "deaths_cycle": deaths_cycle,
+                    "current_set": current_set,
+                    "ts": datetime.now().isoformat(timespec="seconds"),
+                },
+                f,
+                ensure_ascii=False,
+            )
+    except OSError:
+        pass
+
+
+def run_agent(
+    max_rounds: int = 0,
+    interval: float | None = None,
+    max_hours: float = 0.0,
+    resume: bool = False,
+) -> dict:
+    """主循环：感知 → 预判 → 评估 → 知识 → 决策 → 动作 → 记忆 → 复盘 → 汇报。"""
+    interval = safe_float(interval if interval is not None else cfg_get("agent.loop_interval", 0.5), 0.5)
+    game = active_game()
+    perception = Perception()
+    evaluator = CombatEvaluator()
+    dead_threshold = safe_int(cfg_get("agent.death_frame_threshold", 8), 8)
+    boss_interval = safe_float(cfg_get("agent.boss_memory_interval", 12), 12)
+    learn_interval = safe_int(cfg_get("agent.learning_stats_interval", 24), 24)
+    report_every = safe_int(cfg_get("agent.report_every", 0), 0)
+    boss_sample_max = safe_int(cfg_get("agent.boss_sample_max", 120), 120)
+
+    log("=" * 58)
+    log(f"  Universal-Game-Framework v{VERSION} 单文件 Agent 启动")
+    log(f"  {runtime_mode_text()}")
+    if dry_run():
+        log("  模式: DRY-RUN —— 只记录动作，不碰真实键鼠")
+    log("=" * 58)
+
+    log("[清理] " + kb_maintain())
+    seeded = seed_knowledge(game)
+    if seeded:
+        log(f"[知识] 已补种 {len(seeded)} 份 seed 知识到 knowledge_md/{game}/")
+    info = resume_info()
+    resumable = session_record_start(game)
+    if resumable and info:
+        log("[续玩] " + info)
+        st = session_load()
+        st["resumed"] = True
+        session_save(st)
+
+    rounds = deaths = death_streak = set_switches = 0
+    skipped = 0
+    action_counts: dict = {}
+    current_set = str(cfg_get("combat.default_set", "combat"))
+    state: FramePayload = {}
+    boss_obs: list = []
+    boss_samples: dict = {}
+    learn_buf: list = []
+    deaths_cycle = 0
+    last_boss_memory = 0.0
+    paused = False
+    t_start = time.time()
+    deadline = t_start + safe_float(max_hours) * 3600 if safe_float(max_hours) > 0 else 0.0
+    clean_exit = False
+    ckpt_path = os.path.join(RUN_LOGS, "loop_checkpoint.json")
+    ckpt_interval = safe_int(cfg_get("agent.checkpoint_interval", 30), 30)
+    if resume:
+        ck = _read_json(ckpt_path, {})
+        if isinstance(ck, dict) and ck:
+            if ck.get("game") == game:
+                rounds = safe_int(ck.get("rounds"))
+                deaths = safe_int(ck.get("deaths"))
+                set_switches = safe_int(ck.get("set_switches"))
+                deaths_cycle = safe_int(ck.get("deaths_cycle"))
+                if ck.get("current_set"):
+                    current_set = str(ck.get("current_set"))
+                log(
+                    f"[续跑] 检查点恢复：回合={rounds} 死亡={deaths} 套装={current_set}（{ck.get('ts', '?')}）"
+                )
+            else:
+                log(f"[续跑] 检查点属于游戏 {ck.get('game')!r}，与当前 {game!r} 不符，从头开始")
+
+    log("[Agent] 进入游戏主循环...\n")
+    try:
+        while True:
+            if max_rounds and rounds >= max_rounds:
+                log("[Agent] 达到最大轮数，退出")
+                clean_exit = True
+                break
+            if deadline and time.time() >= deadline:
+                log(f"[Agent] 达到时长上限 {max_hours}h，收尾退出")
+                clean_exit = True
+                break
+            rounds += 1
+
+            if reload_if_changed():
+                log("[配置] config.yaml / 游戏档案已变更，热加载完成")
+
+            if mouse_in_corner():
+                if not paused:
+                    log("[安全] 鼠标在屏幕角落，暂停 Agent")
+                    paused = True
+                time.sleep(1)
+                continue
+            if paused:
+                log("[安全] 鼠标离开角落，恢复 Agent")
+                paused = False
+
+            # 1. 感知
+            state = perception.perceive()
+            if state.get("error"):
+                log(f"[感知] 异常: {state['error']}")
+                PREDICTOR.reset()
+                time.sleep(1)
+                continue
+            if state.get("afk_popup"):
+                log("[AFK] 检测到人机验证弹窗，跳过本回合（可用 action move 手动点）")
+                skipped += 1
+                time.sleep(interval)
+                continue
+
+            _praw = state.get("player")
+            player = _praw if isinstance(_praw, dict) else {}
+
+            # 2. 死亡防抖
+            if not player.get("alive", True):
+                death_streak += 1
+                if death_streak >= dead_threshold:
+                    deaths += 1
+                    deaths_cycle += 1
+                    log_event("death", round=rounds, deaths=deaths)
+                    if should_review(state):
+                        log(review_round(False, "玩家死亡，复盘本局", state))
+                    else:
+                        log("[复盘] 普通小怪局，不生成复盘（省硬盘）")
+                        PREDICTOR.reset()
+                    death_streak = 0
+                    evaluator.invalidate()
+                    time.sleep(2)
+                    continue
+            else:
+                death_streak = 0
+
+            # 3. 预判
+            predictions = PREDICTOR.all_entities()
+
+            # 4. 战斗评估
+            teammates = state.get("teammates") or []
+            ev = evaluator.evaluate(player, predictions, teammates)
+
+            # 5. 换套（去抖）
+            rec = ev.get("recommended_set")
+            if rec and rec != current_set:
+                res = switch_set(rec)
+                kb_append(
+                    "player_tactics",
+                    f"- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} "
+                    f"决策={ev.get('decision')} 心态={ev.get('mindset')} "
+                    f"威胁比={ev.get('threat_ratio')} → 换 {rec} 套",
+                    game=game,
+                )
+                log(f"[套装] {current_set} → {rec}（{res}）")
+                current_set = rec
+                set_switches += 1
+
+            # 6. 检索知识 + 记账
+            keyword = "boss" if ev.get("has_highest_boss") else "战术"
+            kb_text = kb_search(keyword, game=game)
+            hit = kb_is_hit(kb_text)
+            learn_buf.append((keyword, hit))
+            LEARNING_STATS.record_search(game, hit)
+
+            # 7. 决策
+            action = _autopilot_action(state, predictions, ev, kb_text) or {"action": "idle"}
+            if action.get("source") == "kb" or (hit and extract_tactics(kb_text)):
+                LEARNING_STATS.record_citation(game)
+
+            # 8. 走位钳制 + 拟人抖动
+            atype = action.get("action", "idle")
+            if atype == "move":
+                sx, sy = scale_coords(action.get("x", 400), action.get("y", 300))
+                tx, ty = clamp_to_safe_zone(sx, sy)
+                tx, ty = apply_jitter(tx, ty)
+                out = game_action("move", int(tx), int(ty))
+            else:
+                out = game_action(atype)
+            action_counts[atype] = action_counts.get(atype, 0) + 1
+            log_event(
+                "decision",
+                round=rounds,
+                action=atype,
+                source=str(action.get("source") or ""),
+                decision=ev.get("decision"),
+                mindset=ev.get("mindset"),
+            )
+            if any(k in out for k in ("错误", "必须提供", "未知动作")):
+                log(f"[动作] 异常: {out}")
+
+            # 9. BOSS 行为观察
+            if ev.get("has_highest_boss") or any(e.get("category") == "boss" for e in predictions):
+                px, py = safe_float(player.get("x")), safe_float(player.get("y"))
+                for e in predictions:
+                    if e.get("category") not in ("boss", "highest_boss"):
+                        continue
+                    uid = f"{e.get('raw_id', '?')}({e.get('rarity', '?')})"
+                    boss_obs.append(
+                        f"{datetime.now().strftime('%H:%M:%S')} {uid} "
+                        f"位置({e.get('x_now')},{e.get('y_now')}) "
+                        f"预判({e.get('x_predict')},{e.get('y_predict')}) "
+                        f"决策={ev.get('decision')}"
+                    )
+                    s = boss_samples.setdefault(uid, [])
+                    if len(s) >= boss_sample_max:
+                        s.pop(0)
+                    s.append((e.get("x_now", 0), e.get("y_now", 0), px, py))
+
+            now = time.time()
+            if now - last_boss_memory > boss_interval:
+                write_boss_memory(boss_obs, boss_samples)
+                boss_obs = []
+                last_boss_memory = now
+
+            # 10. 快照 / 进度汇报
+            if rounds % 2 == 0:
+                write_snapshot(
+                    rounds,
+                    deaths,
+                    player,
+                    predictions,
+                    ev,
+                    game,
+                    action_source=str(action.get("source") or ""),
+                )
+            if ckpt_interval > 0 and rounds % ckpt_interval == 0:
+                _write_checkpoint(ckpt_path, game, rounds, deaths, set_switches, deaths_cycle, current_set)
+            if report_every and rounds % report_every == 0:
+                notify_progress(rounds, deaths)
+
+            # 11. 学习统计 + 自动调参
+            if learn_interval and rounds % learn_interval == 0 and learn_buf:
+                hits = sum(1 for _k, h in learn_buf if h)
+                kb_append(
+                    "learning_stats",
+                    f"- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 汇总：{hits}/{len(learn_buf)} 次命中",
+                    game=game,
+                )
+                log(auto_tune(hits=hits, attempts=len(learn_buf), deaths_extra=deaths_cycle))
+                learn_buf = []
+                deaths_cycle = 0
+
+            log(
+                f"[回合 {rounds}] HP={player.get('hp')} 敌人={len(predictions)} "
+                f"队友={len(teammates)} 决策={ev.get('decision')} 套装={current_set} "
+                f"心态={ev.get('mindset')} → {atype}"
+            )
+            time.sleep(interval)
+
+    except KeyboardInterrupt:
+        log("\n[Agent] 收到中断信号")
+    finally:
+        try:
+            write_boss_memory(boss_obs, boss_samples)
+        except Exception as e:
+            log(f"[记忆] 退出前写 BOSS 记忆失败: {e}")
+        try:
+            log(review_round(True, "Agent 正常退出", state))
+        except Exception as e:
+            log(f"[复盘] 退出前复盘失败: {e}")
+        elapsed = time.time() - t_start
+        speed = (rounds / elapsed) if elapsed > 0 else 0.0
+        log(
+            "[汇总] "
+            + " | ".join(
+                [
+                    f"回合={rounds}",
+                    f"死亡={deaths}",
+                    f"跳过帧={skipped}",
+                    f"换套={set_switches}",
+                    "动作=" + (",".join(f"{k}x{v}" for k, v in sorted(action_counts.items())) or "无"),
+                    f"耗时={elapsed:.1f}s（{speed:.1f} 回合/秒）",
+                ]
+            )
+        )
+        try:
+            LEARNING_STATS.save()
+            log("[知识] " + LEARNING_STATS.summary(game))
+        except Exception as e:
+            log(f"[知识] 指标落盘失败: {e}")
+        report_text = generate_report()
+        try:
+            actions = notify(quiet=True)
+            session_record_end(game, rounds, deaths, report_text)
+            log("[汇报] " + "；".join(actions))
+        except Exception as e:
+            log(f"[汇报] 收尾失败: {e}")
+        if clean_exit:
+            with contextlib.suppress(OSError):
+                os.remove(ckpt_path)
+        elif rounds > 0:
+            _write_checkpoint(ckpt_path, game, rounds, deaths, set_switches, deaths_cycle, current_set)
+            log(f"[续跑] 非正常收尾，检查点已保存（回合={rounds}），run --resume 可恢复")
+
+    return {
+        "rounds": rounds,
+        "deaths": deaths,
+        "skipped": skipped,
+        "set_switches": set_switches,
+        "actions": action_counts,
+        "elapsed": round(time.time() - t_start, 2),
+    }
+
+
+def runtime_mode_text() -> str:
+    m = runtime_mode()
+    return (
+        f"模式={m['mode']} | 感知={m['perception_backend']} | "
+        f"LLM={m['llm']} | VLM={m['vlm']} | 游戏={m['game']}"
+    )
+
+
+# 有明确安全区间的配置键（越界=ERROR）；与调参钳制区间/端口规范保持一致
+CONFIG_RANGES = {
+    "combat.retreat_ratio": (0.5, 1.5),
+    "predictor.confidence_threshold": (0.30, 0.90),
+    "server.perception_port": (1024, 65535),
+    "server.panel_port": (1024, 65535),
+    "predictor.predict_seconds": (0.05, 10.0),
+    "predictor.min_frames": (1, 30),
+    "predictor.history_maxlen": (3, 200),
+    "predictor.entity_timeout": (0.05, 10.0),
+    "predictor.accel_max": (1.0, 100000.0),
+    "agent.loop_interval": (0.0, 120.0),
+    "agent.death_frame_threshold": (1, 1000),
+    "agent.kb_max_mb": (1, 100000),
+    "agent.checkpoint_interval": (0, 100000),
+    "logs.retention_days": (0, 3650),
+    "logs.max_size_mb": (1, 100000),
+    "kb.search_top_n": (1, 100),
+    "kb.history_revisions": (1, 1000),
+    "learn.min_votes": (1, 100),
+    "resilience.perception.retries": (0, 20),
+    "resilience.webhook.retries": (0, 20),
+    "resilience.llm.retries": (0, 20),
+}
+
+
+def _flatten_raw(d: dict, pre: str = "") -> dict:
+    """把原始 YAML 树拍平成点分键；DEFAULT 中 dict 值的键视为终端（如 predictor.threat）。"""
+    namespaces = set()
+    for k in DEFAULT:
+        parts = k.split(".")
+        for i in range(1, len(parts)):
+            namespaces.add(".".join(parts[:i]))
+    dict_valued = {k for k, v in DEFAULT.items() if isinstance(v, dict)}
+    out: dict = {}
+    for k, v in d.items():
+        key = f"{pre}{k}"
+        if str(key).startswith("_"):
+            continue  # _cooldown/_audit 等内部键跳过
+        if isinstance(v, dict) and key in namespaces and key not in dict_valued:
+            out.update(_flatten_raw(v, key + "."))
+        else:
+            out[key] = v
+    return out
+
+
+def _type_ok(actual, expect) -> bool:
+    if expect is None:
+        return True  # None 默认值 = 任意类型（如 capture_region/player_stub）
+    if isinstance(expect, bool):
+        return isinstance(actual, bool)
+    if isinstance(expect, (int, float)):
+        return isinstance(actual, (int, float)) and not isinstance(actual, bool)
+    if isinstance(expect, str):
+        return isinstance(actual, str)
+    if isinstance(expect, list):
+        return isinstance(actual, list)
+    if isinstance(expect, dict):
+        return isinstance(actual, dict)
+    return True
+
+
+def config_check() -> int:
+    """ROADMAP v2 #14：config.yaml / tuned_overrides.yaml 体检。
+
+    未知键 WARN（大概率拼写错误，运行时会被静默忽略）；类型不符 ERROR；
+    有安全区间的键越界 ERROR。返回退出码（0=通过）。
+    """
+    issues: list = []
+    known = set(DEFAULT)
+    files = [("config.yaml", CONFIG_PATH), ("tuned_overrides.yaml", TUNED_PATH)]
+    for label, path in files:
+        if not os.path.exists(path):
+            if label == "config.yaml":
+                issues.append(("WARN", label, "文件不存在（将只用内置默认值）"))
+            continue
+        raw = _read_yaml(path)
+        if not raw:
+            issues.append(("ERROR", label, "无法解析为 YAML 字典"))
+            continue
+        for key, val in _flatten_raw(raw).items():
+            if key not in known:
+                issues.append(("WARN", f"{label}:{key}", "未知键（不会被读取，疑似拼写错误）"))
+                continue
+            if not _type_ok(val, DEFAULT[key]):
+                issues.append(
+                    (
+                        "ERROR",
+                        f"{label}:{key}",
+                        f"类型应为 {type(DEFAULT[key]).__name__}，实际 {type(val).__name__}",
+                    )
+                )
+                continue
+            rng = CONFIG_RANGES.get(key)
+            if rng and isinstance(val, (int, float)) and not isinstance(val, bool):
+                lo, hi = rng
+                if not lo <= val <= hi:
+                    issues.append(("ERROR", f"{label}:{key}", f"超出安全区间 [{lo}, {hi}]：{val}"))
+    errors = [i for i in issues if i[0] == "ERROR"]
+    warns = [i for i in issues if i[0] == "WARN"]
+    status = "✗ FAIL" if errors else ("⚠ PASS(有警告)" if warns else "✓ PASS")
+    print(f"[{status}] 配置体检 —— {len(errors)} 错误 / {len(warns)} 警告")
+    for level, key, msg in issues:
+        print(f"    {level}: {key}: {msg}")
+    return 1 if errors else 0
+
+

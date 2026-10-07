@@ -1,0 +1,35 @@
+# 本地提交前全套体检（安装：pip install pre-commit && pre-commit install）
+# 顺序按快→慢排；ROADMAP v2 #13
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check（阻断）
+        entry: ruff check .
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: ruff-format
+        name: ruff format（自动修）
+        entry: ruff format .
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: check-agent
+        name: 分片构建一致性（阻断）
+        entry: python build.py check-agent
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: secret-scan
+        name: 密钥防泄漏扫描（阻断）
+        entry: python tools/secret_scan.py
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: mypy
+        name: mypy agent.py（阻断，当前 0 error）
+        entry: python -m mypy agent.py
+        language: system
+        pass_filenames: false
+        always_run: true

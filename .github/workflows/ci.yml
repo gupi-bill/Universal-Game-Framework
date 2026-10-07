@@ -1,0 +1,120 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: pytest (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.13']
+
+    env:
+      # 无头环境：感知走 mock、动作走 dry-run，不碰键鼠与其他服务。
+      UGF_DRY_RUN: '1'
+      UGF_PERCEPTION_BACKEND: 'mock'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov
+
+      - name: 单元测试（覆盖率防倒退门槛 70%，ROADMAP #20）
+        run: python -m pytest tests/ -q --cov=agent --cov-fail-under=70
+
+      - name: 端到端自检（离线全链路）
+        run: python agent.py selftest
+
+      - name: 游戏档案校验（ROADMAP #10）
+        run: python agent.py profile-check --all
+
+      - name: 配置体检（ROADMAP v2 #14）
+        run: python agent.py config-check
+
+      - name: 分片构建一致性（ROADMAP #2）
+        run: python build.py check-agent
+
+  lint:
+    name: ruff (check + format)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装 ruff
+        run: python -m pip install --upgrade ruff
+
+      # ROADMAP #3：静态检查阻断（规则集固化在 pyproject.toml [tool.ruff]）
+      - name: ruff check（阻断）
+        run: ruff check .
+
+      - name: ruff format --check（阻断）
+        run: ruff format --check .
+
+      # ROADMAP #4 第一阶段：mypy 宽松档非阻断；核心链路注解已齐（0 error），
+      # 稳定一个版本后去掉 || true 转阻断
+      - name: mypy（非阻断）
+        run: |
+          pip install mypy
+          mypy agent.py || echo "::warning::mypy 发现类型问题（第一阶段不阻断）"
+
+  docker:
+    name: Docker 镜像构建冒烟（ROADMAP #23）
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 构建镜像（多阶段）
+        run: docker build -t ugf-agent .
+
+      - name: 容器内离线自检
+        run: docker run --rm ugf-agent selftest
+
+  secret-scan:
+    name: 密钥防泄漏扫描
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # ROADMAP #24：仓库内容扫描（tools/secret_scan.py 落地后生效）
+      - name: 密钥扫描
+        run: |
+          if [ -f tools/secret_scan.py ]; then
+            python tools/secret_scan.py
+          else
+            echo "tools/secret_scan.py 尚未落地，跳过"
+          fi
