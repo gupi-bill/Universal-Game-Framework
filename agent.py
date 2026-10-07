@@ -619,7 +619,7 @@ def _text_search(keyword: str, base: str) -> str:
             try:
                 with open(fp, encoding="utf-8") as f:
                     content = f.read()
-            except OSError:
+            except (OSError, UnicodeDecodeError):  # 损坏/二进制文件跳过而非崩溃
                 continue
             docs.append((os.path.relpath(fp, base), content, kw in content.lower()))
     if not docs:
