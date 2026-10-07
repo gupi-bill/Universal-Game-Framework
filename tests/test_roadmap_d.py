@@ -142,3 +142,57 @@ def test_learn_from_video_pipeline_offline(tmp_path, monkeypatch):
     assert res["frames"] == 5
     assert res["kept"] == 0 and res["voted"] == 0
     assert "dedup_skipped" in res
+
+
+# ---------------------------------------------------------------------------
+# #17 监控面板
+# ---------------------------------------------------------------------------
+def test_panel_server_serves_state_and_html(tmp_path, monkeypatch):
+    import json as _json
+    import threading
+    import urllib.request
+
+    monkeypatch.setattr(agent, "RUN_LOGS", str(tmp_path))
+    monkeypatch.setattr(agent, "SNAP_FILE", str(tmp_path / "agent_snapshot.json"))
+    (tmp_path / "agent_snapshot.json").write_text(
+        _json.dumps(
+            {
+                "round": 7,
+                "deaths": 1,
+                "game": "florr",
+                "decision": "fight",
+                "action_source": "rule",
+                "threats": [{"name": "mantis", "cat": "boss", "threat": 400, "x": 1, "y": 2}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    srv, port = agent.start_panel_server("127.0.0.1", 0)
+    t = threading.Thread(target=srv.serve_forever, daemon=True)
+    t.start()
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/state", timeout=5) as r:
+            data = _json.loads(r.read().decode("utf-8"))
+        assert data["snapshot"]["round"] == 7
+        for key in ("mode", "session", "events", "log_tail", "learning", "tuner"):
+            assert key in data
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5) as r:
+            html = r.read().decode("utf-8")
+        assert "<html" in html.lower() and "/api/state" in html
+        # 404 路径
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/nope", timeout=5)
+            raise AssertionError("应 404")
+        except urllib.error.HTTPError as e:
+            assert e.code == 404
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_panel_state_zero_side_effect(tmp_path, monkeypatch):
+    """agent 没跑过（无快照）时面板数据也能安全聚合。"""
+    monkeypatch.setattr(agent, "RUN_LOGS", str(tmp_path))
+    monkeypatch.setattr(agent, "SNAP_FILE", str(tmp_path / "nonexistent.json"))
+    d = agent._panel_state()
+    assert d["snapshot"] == {} and isinstance(d["events"], list)
