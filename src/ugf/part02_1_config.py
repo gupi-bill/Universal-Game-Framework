@@ -5,6 +5,7 @@ DEFAULT = {
     "game.name": "florr",
     "game.description": "",
     "server.perception_port": 5001,  # http 感知后端端口
+    "server.panel_port": 5002,  # 监控面板默认端口（ROADMAP v2 #14 收编进 DEFAULT）
     "perception.backend": "auto",  # auto | http | mock | local | template（ROADMAP #6）
     "perception.http_url": "",  # 留空则用 http://127.0.0.1:<port>/perceive
     "perception.timeout": 24,  # 首帧要加载 YOLO，给足时间

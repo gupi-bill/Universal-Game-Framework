@@ -6,7 +6,7 @@ def _threat_table() -> dict:
 
 
 def classify_by_rarity(rarity: str) -> str:
-    r = (rarity or "").strip().capitalize()
+    r = str(rarity or "").strip().capitalize()  # str() 兜底：脏数据(int等)不崩（fuzz #v2-15）
     if r in set(cfg_get("predictor.rarity_highest_boss", [])):
         return "highest_boss"
     if r in set(cfg_get("predictor.rarity_boss", [])):
@@ -25,7 +25,7 @@ PLAYER_ALLY_MARKERS = ("player_ally", "ally", "teammate", "friend", "party")
 def detect_role(raw_id: str, explicit: str | None = None) -> str:
     if explicit in ("player_enemy", "player_ally", "monster"):
         return explicit
-    rid = (raw_id or "").lower()
+    rid = str(raw_id or "").lower()  # str() 兜底：raw_id 为脏类型时不崩
     if any(m in rid for m in PLAYER_ENEMY_MARKERS):
         return "player_enemy"
     if any(m in rid for m in PLAYER_ALLY_MARKERS):
@@ -430,6 +430,7 @@ class Predictor:
                         "vy_per_sec": 0,
                         "confidence": 0.0,
                         "prediction_trusted": False,
+                        "model": "none",
                     }
                 )
         out.sort(key=lambda e: e["threat_score"], reverse=True)

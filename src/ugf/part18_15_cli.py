@@ -26,6 +26,7 @@ GUIDE = """# Universal-Game-Framework · 单文件游戏 Agent 使用手册
     learn    视频学习：learn video.mp4 或 learn --url <链接> --frames 5
     report   生成一份对局报告（写 run_logs/，可选 Webhook）
     doctor   环境体检：依赖/目录/档案/感知/密钥，✓⚠✗ 清单（致命项退出码 1）
+    config-check  体检 config.yaml / tuned_overrides.yaml（未知键/类型/安全区间）
     bench    性能基准：--rounds N，分段计时 感知/预判/评估/决策/动作
     panel    本地监控面板（纯标准库，只读快照/事件/日志，Ctrl+C 停止）
     logs     查看运行日志：--tail N / --grep KW / --events --kind decision / --stats
@@ -191,7 +192,13 @@ def build_parser() -> argparse.ArgumentParser:
         "  python agent.py selftest\n  python agent.py guide",
     )
     # dest 与子命令位置参数 game 区分开：--game 是全局切换，位置参数只作用于该子命令
-    ap.add_argument("--game", default="", dest="game_opt", help="指定游戏名（读 game_profiles/<名字>.yaml）")
+    ap.add_argument(
+        "--game",
+        default="",
+        dest="game_opt",
+        metavar="NAME",
+        help="指定游戏名（读 game_profiles/<名字>.yaml）",
+    )
     ap.add_argument("--version", action="store_true", help="打印版本号并退出")
     sub = ap.add_subparsers(dest="cmd")
 
@@ -293,6 +300,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("replay", help="对局回放：事件时间线（ROADMAP v2 #12）")
     sp.add_argument("--tail", type=int, default=0, help="只看最后 N 条事件")
+
+    sub.add_parser("config-check", help="体检 config.yaml / tuned_overrides.yaml（ROADMAP v2 #14）")
     return ap
 
 
@@ -354,6 +363,8 @@ def main(argv=None) -> int:
         return brief(args.game)
     elif cmd == "replay":
         print(replay(args.tail))
+    elif cmd == "config-check":
+        return config_check()
     elif cmd == "tune":
         if args.reset:
             print(auto_tuner_reset())

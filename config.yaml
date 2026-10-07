@@ -18,10 +18,6 @@ perception:
   #                     需 pip install opencv-python-headless numpy mss）
   # 环境变量 UGF_PERCEPTION_BACKEND=mock|http|local|template|auto 优先级高于此处
   backend: auto
-  yolo_timeout: 8              # YOLO 检测超时秒数，超过就跳过这一帧
-  skip_on_timeout: 0.8         # 超时时休眠秒数，给 CPU 喘息
-  screen_w: 1920               # 越界过滤用屏幕尺寸（可被实际分辨率覆盖）
-  screen_h: 1080
   capture_region: ""           # local/template 抓屏区域："x,y,w,h" 简写或 mss dict；空=全屏（ROADMAP v2 #8）
   source_w: 0                  # 感知后端坐标系宽（0=与逻辑屏一致不缩放；ROADMAP #19）
   source_h: 0                  # 感知后端坐标系高

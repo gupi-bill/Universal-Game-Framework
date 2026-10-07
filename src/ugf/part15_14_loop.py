@@ -346,3 +346,110 @@ def runtime_mode_text() -> str:
     )
 
 
+# 有明确安全区间的配置键（越界=ERROR）；与调参钳制区间/端口规范保持一致
+CONFIG_RANGES = {
+    "combat.retreat_ratio": (0.5, 1.5),
+    "predictor.confidence_threshold": (0.30, 0.90),
+    "server.perception_port": (1024, 65535),
+    "server.panel_port": (1024, 65535),
+    "predictor.predict_seconds": (0.05, 10.0),
+    "predictor.min_frames": (1, 30),
+    "predictor.history_maxlen": (3, 200),
+    "predictor.entity_timeout": (0.05, 10.0),
+    "predictor.accel_max": (1.0, 100000.0),
+    "agent.loop_interval": (0.0, 120.0),
+    "agent.death_frame_threshold": (1, 1000),
+    "agent.kb_max_mb": (1, 100000),
+    "agent.checkpoint_interval": (0, 100000),
+    "logs.retention_days": (0, 3650),
+    "logs.max_size_mb": (1, 100000),
+    "kb.search_top_n": (1, 100),
+    "kb.history_revisions": (1, 1000),
+    "learn.min_votes": (1, 100),
+    "resilience.perception.retries": (0, 20),
+    "resilience.webhook.retries": (0, 20),
+    "resilience.llm.retries": (0, 20),
+}
+
+
+def _flatten_raw(d: dict, pre: str = "") -> dict:
+    """把原始 YAML 树拍平成点分键；DEFAULT 中 dict 值的键视为终端（如 predictor.threat）。"""
+    namespaces = set()
+    for k in DEFAULT:
+        parts = k.split(".")
+        for i in range(1, len(parts)):
+            namespaces.add(".".join(parts[:i]))
+    dict_valued = {k for k, v in DEFAULT.items() if isinstance(v, dict)}
+    out: dict = {}
+    for k, v in d.items():
+        key = f"{pre}{k}"
+        if str(key).startswith("_"):
+            continue  # _cooldown/_audit 等内部键跳过
+        if isinstance(v, dict) and key in namespaces and key not in dict_valued:
+            out.update(_flatten_raw(v, key + "."))
+        else:
+            out[key] = v
+    return out
+
+
+def _type_ok(actual, expect) -> bool:
+    if expect is None:
+        return True  # None 默认值 = 任意类型（如 capture_region/player_stub）
+    if isinstance(expect, bool):
+        return isinstance(actual, bool)
+    if isinstance(expect, (int, float)):
+        return isinstance(actual, (int, float)) and not isinstance(actual, bool)
+    if isinstance(expect, str):
+        return isinstance(actual, str)
+    if isinstance(expect, list):
+        return isinstance(actual, list)
+    if isinstance(expect, dict):
+        return isinstance(actual, dict)
+    return True
+
+
+def config_check() -> int:
+    """ROADMAP v2 #14：config.yaml / tuned_overrides.yaml 体检。
+
+    未知键 WARN（大概率拼写错误，运行时会被静默忽略）；类型不符 ERROR；
+    有安全区间的键越界 ERROR。返回退出码（0=通过）。
+    """
+    issues: list = []
+    known = set(DEFAULT)
+    files = [("config.yaml", CONFIG_PATH), ("tuned_overrides.yaml", TUNED_PATH)]
+    for label, path in files:
+        if not os.path.exists(path):
+            if label == "config.yaml":
+                issues.append(("WARN", label, "文件不存在（将只用内置默认值）"))
+            continue
+        raw = _read_yaml(path)
+        if not raw:
+            issues.append(("ERROR", label, "无法解析为 YAML 字典"))
+            continue
+        for key, val in _flatten_raw(raw).items():
+            if key not in known:
+                issues.append(("WARN", f"{label}:{key}", "未知键（不会被读取，疑似拼写错误）"))
+                continue
+            if not _type_ok(val, DEFAULT[key]):
+                issues.append(
+                    (
+                        "ERROR",
+                        f"{label}:{key}",
+                        f"类型应为 {type(DEFAULT[key]).__name__}，实际 {type(val).__name__}",
+                    )
+                )
+                continue
+            rng = CONFIG_RANGES.get(key)
+            if rng and isinstance(val, (int, float)) and not isinstance(val, bool):
+                lo, hi = rng
+                if not lo <= val <= hi:
+                    issues.append(("ERROR", f"{label}:{key}", f"超出安全区间 [{lo}, {hi}]：{val}"))
+    errors = [i for i in issues if i[0] == "ERROR"]
+    warns = [i for i in issues if i[0] == "WARN"]
+    status = "✗ FAIL" if errors else ("⚠ PASS(有警告)" if warns else "✓ PASS")
+    print(f"[{status}] 配置体检 —— {len(errors)} 错误 / {len(warns)} 警告")
+    for level, key, msg in issues:
+        print(f"    {level}: {key}: {msg}")
+    return 1 if errors else 0
+
+
