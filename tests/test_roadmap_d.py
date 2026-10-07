@@ -251,3 +251,23 @@ def test_resolve_base_dir_repo_default(monkeypatch):
     d = agent._resolve_base_dir()
     assert os.path.isdir(d)
     assert os.path.exists(os.path.join(d, "agent.py")), "仓库内运行应回落代码目录"
+
+
+# ---------------------------------------------------------------------------
+# #22 zipapp 单文件分发
+# ---------------------------------------------------------------------------
+def test_build_pyz_end_to_end():
+    """build.py check：构建 dist/ugf.pyz 并在隔离 UGF_HOME 下跑通 --version + selftest。"""
+    import subprocess
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    r = subprocess.run(
+        [sys.executable, os.path.join(root, "build.py"), "check"],
+        capture_output=True,
+        text=True,
+        timeout=300,
+        cwd=root,
+    )
+    assert r.returncode == 0, r.stdout[-800:] + r.stderr[-300:]
+    assert "19/19" in r.stdout
+    assert os.path.exists(os.path.join(root, "dist", "ugf.pyz"))
