@@ -3,6 +3,7 @@
 只测 agent.py 这个文件，覆盖：配置 / 知识闭环 / 预判 / 战斗评估 / 复盘 /
 汇报 / 调参 / CLI。全部离线运行（mock 感知 + dry-run 动作）。
 """
+
 import os
 import sys
 
@@ -66,8 +67,11 @@ def test_knowledge_gate_blocks_empty_field():
 
 def test_decide_action_uses_knowledge():
     tactics = [("retreat", ("低血量",))]
-    assert agent.decide_action("cautious_fight", tactics, hp_ratio=0.2, threat_ratio_=1.5) in \
-        ("defend", "attack", "")
+    assert agent.decide_action("cautious_fight", tactics, hp_ratio=0.2, threat_ratio_=1.5) in (
+        "defend",
+        "attack",
+        "",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -142,9 +146,11 @@ def test_run_agent_dry_run_executes_actions():
 # 复盘 / 汇报 / 会话 / 调参
 # ---------------------------------------------------------------------------
 def test_review_triggers_on_boss_round():
-    state = {"player": {"petal_set": "combat"},
-             "entities": [{"raw_id": "mantis", "rarity": "Super"}],
-             "teammates": []}
+    state = {
+        "player": {"petal_set": "combat"},
+        "entities": [{"raw_id": "mantis", "rarity": "Super"}],
+        "teammates": [],
+    }
     assert agent.should_review(state) is True
     assert "已写入知识库" in agent.review_round(False, "测试复盘", state)
 
@@ -171,14 +177,17 @@ def test_auto_tune_and_reset():
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
-@pytest.mark.parametrize("argv", [
-    ["mode"],
-    ["kb", "list"],
-    ["action", "attack"],
-    ["set", "retreat"],
-    ["session"],
-    ["tune", "--status"],
-])
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["mode"],
+        ["kb", "list"],
+        ["action", "attack"],
+        ["set", "retreat"],
+        ["session"],
+        ["tune", "--status"],
+    ],
+)
 def test_cli_subcommands_exit_zero(argv):
     assert agent.main(argv) == 0
 

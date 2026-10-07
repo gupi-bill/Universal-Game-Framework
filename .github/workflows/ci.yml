@@ -49,5 +49,46 @@ jobs:
       - name: 端到端自检（离线全链路）
         run: python agent.py selftest
 
-      - name: 静态检查（不阻断）
-        run: pip install ruff && ruff check . || true
+      - name: 游戏档案校验（ROADMAP #10）
+        run: python agent.py profile-check --all
+
+  lint:
+    name: ruff (check + format)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装 ruff
+        run: python -m pip install --upgrade ruff
+
+      # ROADMAP #3：静态检查阻断（规则集固化在 pyproject.toml [tool.ruff]）
+      - name: ruff check（阻断）
+        run: ruff check .
+
+      - name: ruff format --check（阻断）
+        run: ruff format --check .
+
+  secret-scan:
+    name: 密钥防泄漏扫描
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # ROADMAP #24：仓库内容扫描（tools/secret_scan.py 落地后生效）
+      - name: 密钥扫描
+        run: |
+          if [ -f tools/secret_scan.py ]; then
+            python tools/secret_scan.py
+          else
+            echo "tools/secret_scan.py 尚未落地，跳过"
+          fi

@@ -40,3 +40,19 @@ ugf = "agent:main"
 
 [tool.setuptools]
 py-modules = ["agent"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+
+[tool.ruff.lint]
+# 项目规则集：pyflakes + pycodestyle + bugbear + simplify + comprehension + pyupgrade
+select = ["E", "F", "W", "B", "SIM", "C4", "UP"]
+ignore = [
+    "E501",   # 行宽交给 ruff format 处理
+    "SIM108", # 三元表达式不强制（可读性优先）
+    "B008",   # 函数调用默认值（argparse 场景无副作用）
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]

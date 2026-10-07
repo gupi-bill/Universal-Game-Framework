@@ -1,4 +1,5 @@
 """ROADMAP #10（档案校验）与 #19（平台兼容）回归测试。"""
+
 import os
 import sys
 
@@ -37,7 +38,8 @@ def test_profile_check_detects_broken_profile(tmp_path, monkeypatch):
         " player_enemy: 8, player_ally: 0, unknown: 2}\n"
         "combat:\n  chase_min_category: elite\n  default_set: ghost\n"
         "  sets: [combat, tank]\n",
-        encoding="utf-8")
+        encoding="utf-8",
+    )
     issues = agent.profile_check_one("badgame")
     paths = " ".join(i[1] + i[2] for i in issues)
     assert any("重叠" in i[2] for i in issues), "应抓到稀有度重叠"
@@ -61,16 +63,18 @@ def test_scale_coords_noop_by_default():
 
 
 def test_scale_coords_maps_source_to_logical(monkeypatch):
-    fake = {"perception": {"source_w": 960, "source_h": 540},
-            "combat": {"safe_zone_w": 1920, "safe_zone_h": 1080}}
+    fake = {
+        "perception": {"source_w": 960, "source_h": 540},
+        "combat": {"safe_zone_w": 1920, "safe_zone_h": 1080},
+    }
     monkeypatch.setattr(agent, "_CFG", fake)
     assert agent.scale_coords(480, 270) == (960.0, 540.0)
     assert agent.scale_coords(0, 0) == (0.0, 0.0)
 
 
 def test_setup_console_and_dpi_are_safe():
-    agent._setup_console()          # 任意平台可重复调用
-    agent._enable_windows_dpi()     # 非 Windows 静默跳过；幂等
+    agent._setup_console()  # 任意平台可重复调用
+    agent._enable_windows_dpi()  # 非 Windows 静默跳过；幂等
     agent._enable_windows_dpi()
 
 

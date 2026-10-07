@@ -24,10 +24,12 @@ Universal-Game-Framework · 单文件游戏 Agent  (v3.0)
 ⚠️ 声明：仅用于本地 AI 智能体技术研究。在 florr.io 官方服务器运行 bot 违反游戏服务条款，
    可能导致账号封禁。请在本地 / 自建 / 已授权环境使用。
 """
+
 from __future__ import annotations
 
 import argparse
 import base64
+import contextlib
 import difflib
 import json
 import math
@@ -55,7 +57,7 @@ def _load_dotenv(path: str = None):
     if not os.path.exists(path):
         return
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line or line.startswith("#") or "=" not in line:
@@ -75,10 +77,8 @@ def _setup_console():
     """控制台编码硬化（ROADMAP #19）：Windows GBK 终端下中文日志不再抛
     UnicodeEncodeError——统一把 stdout/stderr 切到 UTF-8，失败静默降级。"""
     for stream in (sys.stdout, sys.stderr):
-        try:
+        with contextlib.suppress(AttributeError, ValueError, OSError):
             stream.reconfigure(encoding="utf-8", errors="replace")
-        except (AttributeError, ValueError, OSError):
-            pass
 
 
 _setup_console()
@@ -119,8 +119,9 @@ def log(msg: str):
     print(line, flush=True)
     try:
         os.makedirs(RUN_LOGS, exist_ok=True)
-        with open(os.path.join(RUN_LOGS, f"agent_{datetime.now().strftime('%Y%m%d')}.log"),
-                  "a", encoding="utf-8") as f:
+        with open(
+            os.path.join(RUN_LOGS, f"agent_{datetime.now().strftime('%Y%m%d')}.log"), "a", encoding="utf-8"
+        ) as f:
             f.write(line + "\n")
     except OSError:
         pass
@@ -140,12 +141,10 @@ def safe_name(name: str, sep: str = "_") -> str:
 DEFAULT = {
     "game.name": "florr",
     "game.description": "",
-
-    "server.perception_port": 5001,          # http 感知后端端口
-    "perception.backend": "auto",            # auto | http | mock
-    "perception.http_url": "",               # 留空则用 http://127.0.0.1:<port>/perceive
-    "perception.timeout": 24,                # 首帧要加载 YOLO，给足时间
-
+    "server.perception_port": 5001,  # http 感知后端端口
+    "perception.backend": "auto",  # auto | http | mock
+    "perception.http_url": "",  # 留空则用 http://127.0.0.1:<port>/perceive
+    "perception.timeout": 24,  # 首帧要加载 YOLO，给足时间
     "predictor.predict_seconds": 1.2,
     "predictor.min_frames": 3,
     "predictor.entity_timeout": 0.4,
@@ -161,10 +160,14 @@ DEFAULT = {
     "predictor.rarity_elite": ["Ultra", "Mythic", "Legendary", "Epic"],
     "predictor.rarity_normal": ["Rare", "Unusual", "Common"],
     "predictor.threat": {
-        "highest_boss": 1000, "boss": 400, "elite": 120, "normal": 15,
-        "player_enemy": 150, "player_ally": 0, "unknown": 5,
+        "highest_boss": 1000,
+        "boss": 400,
+        "elite": 120,
+        "normal": 15,
+        "player_enemy": 150,
+        "player_ally": 0,
+        "unknown": 5,
     },
-
     "combat.eval_debounce_interval": 0.7,
     "combat.jitter_base": 8,
     "combat.jitter_max": 15,
@@ -180,7 +183,6 @@ DEFAULT = {
     "combat.sets": ["combat", "tank", "retreat", "chase", "team"],
     "combat.set_map": {},
     "combat.tactics": [],
-
     "agent.loop_interval": 0.5,
     "agent.game": "florr",
     "agent.webhook_url": "",
@@ -189,11 +191,10 @@ DEFAULT = {
     "agent.boss_sample_max": 120,
     "agent.boss_close_dist": 120,
     "agent.learning_stats_interval": 24,
-    "agent.report_every": 0,                  # 0 = 关闭局中进度汇报
+    "agent.report_every": 0,  # 0 = 关闭局中进度汇报
     "agent.kb_max_mb": 50,
     "agent.kb_archive_dir": "knowledge_archive",
-    "agent.corner_pause": True,               # 鼠标移到屏幕角落 = 安全暂停
-
+    "agent.corner_pause": True,  # 鼠标移到屏幕角落 = 安全暂停
     "paths.knowledge_md": "knowledge_md",
     "paths.frames": "video_frames",
     "paths.run_logs": "run_logs",
@@ -216,7 +217,7 @@ def _read_yaml(path: str) -> dict:
     if not os.path.exists(path):
         return {}
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             data = yaml.safe_load(f)
         return data if isinstance(data, dict) else {}
     except Exception:
@@ -249,8 +250,7 @@ def active_game() -> str:
         v = (os.getenv(var) or "").strip()
         if v:
             return v
-    return str((_CFG.get("agent") or {}).get("game")
-               or (_CFG.get("game") or {}).get("name") or "florr")
+    return str((_CFG.get("agent") or {}).get("game") or (_CFG.get("game") or {}).get("name") or "florr")
 
 
 def reload_config() -> None:
@@ -269,8 +269,7 @@ def active_game_for(tree: dict) -> str:
         v = (os.getenv(var) or "").strip()
         if v:
             return v
-    return str((tree.get("agent") or {}).get("game")
-               or (tree.get("game") or {}).get("name") or "florr")
+    return str((tree.get("agent") or {}).get("game") or (tree.get("game") or {}).get("name") or "florr")
 
 
 def cfg_get(path: str, default=None):
@@ -312,8 +311,9 @@ def dry_run() -> bool:
 
 def runtime_mode() -> dict:
     """统一口径的运行模式快照（CLI `mode` 与日志都用它）。"""
-    backend = (os.getenv("UGF_PERCEPTION_BACKEND") or "").strip() or \
-        str(cfg_get("perception.backend", "auto"))
+    backend = (os.getenv("UGF_PERCEPTION_BACKEND") or "").strip() or str(
+        cfg_get("perception.backend", "auto")
+    )
     backend = backend.lower()
     if dry_run() and backend == "auto":
         backend = "mock"
@@ -347,16 +347,20 @@ def kb_game_dir(game: str = None) -> str:
 # 2. 知识库（Markdown）
 # ===========================================================================
 KB_TEMPLATES = {
-    "_README.md": ("# 本地知识库\n\n所有经验以 Markdown 存储，按游戏分区在 `knowledge_md/<游戏>/`。\n\n"
-                   "## 目录约定\n"
-                   "- `tactics.md` 战术（seed 自动生成，可手改）\n"
-                   "- `boss_guide.md` 高威胁目标指南（seed 自动生成）\n"
-                   "- `boss_behavior_log.md` BOSS 行为习惯（主循环自动追加）\n"
-                   "- `player_tactics.md` 换套/决策记录（主循环自动追加）\n"
-                   "- `review_*.md` 对局复盘（自动生成）\n"
-                   "- `video_tactic_*.md` 视频学习战术（自动生成）\n"),
-    "boss_behavior_log.md": ("# BOSS 行为日志\n\n记录遭遇 BOSS 时的行为习惯：移动模式 / 接近倾向 / 击杀或逃脱经验。\n\n"
-                             "（由 agent.py 主循环每 12 秒批量追加）\n"),
+    "_README.md": (
+        "# 本地知识库\n\n所有经验以 Markdown 存储，按游戏分区在 `knowledge_md/<游戏>/`。\n\n"
+        "## 目录约定\n"
+        "- `tactics.md` 战术（seed 自动生成，可手改）\n"
+        "- `boss_guide.md` 高威胁目标指南（seed 自动生成）\n"
+        "- `boss_behavior_log.md` BOSS 行为习惯（主循环自动追加）\n"
+        "- `player_tactics.md` 换套/决策记录（主循环自动追加）\n"
+        "- `review_*.md` 对局复盘（自动生成）\n"
+        "- `video_tactic_*.md` 视频学习战术（自动生成）\n"
+    ),
+    "boss_behavior_log.md": (
+        "# BOSS 行为日志\n\n记录遭遇 BOSS 时的行为习惯：移动模式 / 接近倾向 / 击杀或逃脱经验。\n\n"
+        "（由 agent.py 主循环每 12 秒批量追加）\n"
+    ),
     "player_tactics.md": "# 玩家打法笔记\n\n记录换套与决策轨迹，便于回看。\n",
 }
 
@@ -406,7 +410,7 @@ def _text_search(keyword: str, base: str) -> str:
         for fn in sorted(f for f in files if f.endswith(".md")):
             fp = os.path.join(root, fn)
             try:
-                with open(fp, "r", encoding="utf-8") as f:
+                with open(fp, encoding="utf-8") as f:
                     content = f.read()
             except OSError:
                 continue
@@ -453,15 +457,18 @@ def kb_query_boss(boss_name: str = "") -> str:
     if not os.path.exists(path):
         return "知识库还没有 BOSS 行为记录(文件不存在)。"
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             content = f.read()
     except OSError as e:
         return f"读取失败: {e}"
     if not boss_name:
         return content or "知识库还没有 BOSS 行为记录。"
     hits = [seg for seg in content.split("### ") if boss_name.lower() in seg.lower()]
-    return ("\n\n".join(f"### {s}" for s in hits)
-            if hits else f"知识库中没有关于「{boss_name}」的 BOSS 行为记录。")
+    return (
+        "\n\n".join(f"### {s}" for s in hits)
+        if hits
+        else f"知识库中没有关于「{boss_name}」的 BOSS 行为记录。"
+    )
 
 
 def kb_switch_tactic(tactic_file: str) -> str:
@@ -474,7 +481,7 @@ def kb_switch_tactic(tactic_file: str) -> str:
     if not os.path.exists(src):
         return f"知识库中没有这份战术文档: {name}"
     try:
-        with open(src, "r", encoding="utf-8") as f:
+        with open(src, encoding="utf-8") as f:
             content = f.read()
         with open(os.path.join(KB_DIR, "_current_tactic.md"), "w", encoding="utf-8") as f:
             f.write(f"# 当前战术: {name}\n\n来自: {name}\n\n{content[:2000]}")
@@ -546,14 +553,14 @@ def kb_compress_duplicates(ratio: float = 0.9) -> int:
     """合并高度相似的 video_tactic_*.md（保留更长的一份）。"""
     if not os.path.isdir(KB_DIR):
         return 0
-    files = sorted(f for f in os.listdir(KB_DIR)
-                   if f.startswith("video_tactic_") and f.endswith(".md"))
+    files = sorted(f for f in os.listdir(KB_DIR) if f.startswith("video_tactic_") and f.endswith(".md"))
     removed = 0
     i = 0
     while i < len(files):
         pa = os.path.join(KB_DIR, files[i])
         try:
-            ta = open(pa, "r", encoding="utf-8").read()
+            with open(pa, encoding="utf-8") as fa:
+                ta = fa.read()
         except OSError:
             i += 1
             continue
@@ -561,7 +568,8 @@ def kb_compress_duplicates(ratio: float = 0.9) -> int:
         while j < len(files):
             pb = os.path.join(KB_DIR, files[j])
             try:
-                tb = open(pb, "r", encoding="utf-8").read()
+                with open(pb, encoding="utf-8") as fb:
+                    tb = fb.read()
             except OSError:
                 j += 1
                 continue
@@ -583,10 +591,8 @@ def _dir_mb(path: str) -> float:
     total = 0
     for root, _d, files in os.walk(path):
         for fn in files:
-            try:
+            with contextlib.suppress(OSError):
                 total += os.path.getsize(os.path.join(root, fn))
-            except OSError:
-                pass
     return total / (1024 * 1024)
 
 
@@ -713,21 +719,31 @@ class _Tracker:
         vy = (latest["y"] - oldest["y"]) / dt
         secs = safe_float(cfg_get("predictor.predict_seconds", 1.2), 1.2)
         px, py = latest["x"] + vx * secs, latest["y"] + vy * secs
-        frame_conf = min(1.0, len(self.history) / max(1.0, safe_float(cfg_get("predictor.frame_full_frames", 8), 8)))
-        speed = (vx ** 2 + vy ** 2) ** 0.5
-        speed_pen = max(safe_float(cfg_get("predictor.speed_penalty_floor", 0.3), 0.3),
-                        1.0 - speed / safe_float(cfg_get("predictor.speed_ref", 2000.0), 2000.0))
+        frame_conf = min(
+            1.0, len(self.history) / max(1.0, safe_float(cfg_get("predictor.frame_full_frames", 8), 8))
+        )
+        speed = (vx**2 + vy**2) ** 0.5
+        speed_pen = max(
+            safe_float(cfg_get("predictor.speed_penalty_floor", 0.3), 0.3),
+            1.0 - speed / safe_float(cfg_get("predictor.speed_ref", 2000.0), 2000.0),
+        )
         jitter_pen = max(safe_float(cfg_get("predictor.jitter_floor", 0.35), 0.35), _linearity(self.history))
         conf = round(frame_conf * speed_pen * jitter_pen, 3)
         trusted = conf >= safe_float(cfg_get("predictor.confidence_threshold", 0.65), 0.65)
         return {
-            "raw_id": self.raw_id, "rarity": self.rarity, "category": self.category,
-            "role": self.role, "threat_score": _threat_table().get(self.category, 5),
-            "x_now": round(latest["x"], 1), "y_now": round(latest["y"], 1),
+            "raw_id": self.raw_id,
+            "rarity": self.rarity,
+            "category": self.category,
+            "role": self.role,
+            "threat_score": _threat_table().get(self.category, 5),
+            "x_now": round(latest["x"], 1),
+            "y_now": round(latest["y"], 1),
             "x_predict": round(px, 1) if trusted else None,
             "y_predict": round(py, 1) if trusted else None,
-            "vx_per_sec": round(vx, 2), "vy_per_sec": round(vy, 2),
-            "confidence": conf, "prediction_trusted": trusted,
+            "vx_per_sec": round(vx, 2),
+            "vy_per_sec": round(vy, 2),
+            "confidence": conf,
+            "prediction_trusted": trusted,
         }
 
 
@@ -751,9 +767,14 @@ class Predictor:
             role = detect_role(raw_id, ent.get("role"))
             cands = [(u, t) for u, t in self._t.items() if t.raw_id == raw_id and u not in seen]
             if cands:
-                uid = min(cands, key=lambda it: (
-                    (it[1].history[-1]["x"] - float(x)) ** 2 + (it[1].history[-1]["y"] - float(y)) ** 2
-                ) if it[1].history else 0.0)[0]
+                uid = min(
+                    cands,
+                    key=lambda it: (
+                        ((it[1].history[-1]["x"] - float(x)) ** 2 + (it[1].history[-1]["y"] - float(y)) ** 2)
+                        if it[1].history
+                        else 0.0
+                    ),
+                )[0]
             else:
                 self._uid += 1
                 uid = f"{raw_id}_{self._uid}"
@@ -775,24 +796,36 @@ class Predictor:
                 out.append(p)
             elif tk.history:
                 last = tk.history[-1]
-                out.append({
-                    "raw_id": tk.raw_id, "rarity": tk.rarity, "category": tk.category,
-                    "role": tk.role, "threat_score": _threat_table().get(tk.category, 5),
-                    "x_now": round(last["x"], 1), "y_now": round(last["y"], 1),
-                    "x_predict": None, "y_predict": None, "vx_per_sec": 0, "vy_per_sec": 0,
-                    "confidence": 0.0, "prediction_trusted": False,
-                })
+                out.append(
+                    {
+                        "raw_id": tk.raw_id,
+                        "rarity": tk.rarity,
+                        "category": tk.category,
+                        "role": tk.role,
+                        "threat_score": _threat_table().get(tk.category, 5),
+                        "x_now": round(last["x"], 1),
+                        "y_now": round(last["y"], 1),
+                        "x_predict": None,
+                        "y_predict": None,
+                        "vx_per_sec": 0,
+                        "vy_per_sec": 0,
+                        "confidence": 0.0,
+                        "prediction_trusted": False,
+                    }
+                )
         out.sort(key=lambda e: e["threat_score"], reverse=True)
-        return out[:safe_int(cfg_get("predictor.max_output_entities", 8), 8)]
+        return out[: safe_int(cfg_get("predictor.max_output_entities", 8), 8)]
 
     def reset(self):
         self._t.clear()
         self._uid = 0
 
     def status(self) -> dict:
-        return {"tracked_entities": len(self._t),
-                "predict_seconds": cfg_get("predictor.predict_seconds"),
-                "confidence_threshold": cfg_get("predictor.confidence_threshold")}
+        return {
+            "tracked_entities": len(self._t),
+            "predict_seconds": cfg_get("predictor.predict_seconds"),
+            "confidence_threshold": cfg_get("predictor.confidence_threshold"),
+        }
 
 
 PREDICTOR = Predictor()
@@ -805,13 +838,24 @@ DECISION_FIGHT, DECISION_CAUTIOUS, DECISION_RETREAT = "fight", "cautious_fight",
 SET_COMBAT, SET_TANK, SET_RETREAT, SET_CHASE, SET_TEAM = "combat", "tank", "retreat", "chase", "team"
 MINDSET_CONSERVATIVE, MINDSET_BALANCED, MINDSET_AGGRESSIVE = "conservative", "balanced", "aggressive"
 
-CATEGORY_RANK = {"unknown": 0, "player_ally": 0, "normal": 1, "player_enemy": 1,
-                 "elite": 2, "boss": 3, "highest_boss": 4}
+CATEGORY_RANK = {
+    "unknown": 0,
+    "player_ally": 0,
+    "normal": 1,
+    "player_enemy": 1,
+    "elite": 2,
+    "boss": 3,
+    "highest_boss": 4,
+}
 
 
 def enemy_threat(enemies: list) -> float:
-    return sum(safe_float(_threat_table().get(
-        (e.get("category", "unknown") if isinstance(e, dict) else "unknown"), 5), 5) for e in enemies or [])
+    return sum(
+        safe_float(
+            _threat_table().get((e.get("category", "unknown") if isinstance(e, dict) else "unknown"), 5), 5
+        )
+        for e in enemies or []
+    )
 
 
 def threat_ratio(player_power: float, threat: float) -> float:
@@ -873,7 +917,9 @@ def judge_combat(player: dict, enemies: list, teammates: list) -> dict:
     elif ratio >= rr * 0.8:
         decision, rec = DECISION_CAUTIOUS, SET_TANK
     else:
-        chaseable = [e for e in enemies or [] if isinstance(e, dict) and e.get("category") in ("boss", "elite")]
+        chaseable = [
+            e for e in enemies or [] if isinstance(e, dict) and e.get("category") in ("boss", "elite")
+        ]
         rec = SET_CHASE if chaseable else SET_COMBAT
 
     if mindset == MINDSET_CONSERVATIVE and hp_ratio < 0.5 and decision == DECISION_FIGHT:
@@ -884,9 +930,15 @@ def judge_combat(player: dict, enemies: list, teammates: list) -> dict:
     if teammates and decision != DECISION_RETREAT:
         rec = _team_set_adjust(teammates, rec)
 
-    return {"decision": decision, "recommended_set": rec, "mindset": mindset,
-            "enemy_threat": round(threat, 1), "threat_ratio": round(ratio, 3),
-            "has_highest_boss": has_highest, "retreat_reason": reason}
+    return {
+        "decision": decision,
+        "recommended_set": rec,
+        "mindset": mindset,
+        "enemy_threat": round(threat, 1),
+        "threat_ratio": round(ratio, 3),
+        "has_highest_boss": has_highest,
+        "retreat_reason": reason,
+    }
 
 
 class CombatEvaluator:
@@ -898,7 +950,8 @@ class CombatEvaluator:
     def evaluate(self, player, enemies, teammates) -> dict:
         now = time.time()
         if self._cache is not None and (now - self._last) < safe_float(
-                cfg_get("combat.eval_debounce_interval", 0.7), 0.7):
+            cfg_get("combat.eval_debounce_interval", 0.7), 0.7
+        ):
             return self._cache
         self._cache = judge_combat(player, enemies, teammates)
         self._last = now
@@ -945,6 +998,7 @@ def clamp_to_safe_zone(x, y, screen_w=None, screen_h=None, margin=None) -> tuple
     def axis(v, size):
         lo, hi = m, size - m
         return size / 2 if hi < lo else max(lo, min(hi, v))
+
     return round(axis(x, sw), 1), round(axis(y, sh), 1)
 
 
@@ -965,7 +1019,7 @@ def retreat_position(player: dict, threat_entity: dict, enemies: list) -> dict:
     ex, ey = safe_float(te.get("x_now"), px), safe_float(te.get("y_now"), py)
     ratio = threat_ratio(player.get("power_score", 100), enemy_threat(enemies))
     dx, dy = px - ex, py - ey
-    dist = (dx ** 2 + dy ** 2) ** 0.5 or 1.0
+    dist = (dx**2 + dy**2) ** 0.5 or 1.0
     sw = safe_float(cfg_get("combat.safe_zone_w", 1920), 1920)
     sh = safe_float(cfg_get("combat.safe_zone_h", 1080), 1080)
     m = safe_float(cfg_get("combat.safe_zone_margin", 100), 100)
@@ -976,11 +1030,17 @@ def retreat_position(player: dict, threat_entity: dict, enemies: list) -> dict:
 
     if ratio > 1.0:
         d = safe_float(cfg_get("combat.flee_distance", 300), 300)
-        return {"x": round(lim(px + dx / dist * d, sw), 1),
-                "y": round(lim(py + dy / dist * d, sh), 1), "strategy": "flee"}
+        return {
+            "x": round(lim(px + dx / dist * d, sw), 1),
+            "y": round(lim(py + dy / dist * d, sh), 1),
+            "strategy": "flee",
+        }
     d = safe_float(cfg_get("combat.strafe_distance", 150), 150)
-    return {"x": round(lim(px - dy / dist * d, sw), 1),
-            "y": round(lim(py + dx / dist * d, sh), 1), "strategy": "strafe"}
+    return {
+        "x": round(lim(px - dy / dist * d, sw), 1),
+        "y": round(lim(py + dx / dist * d, sh), 1),
+        "strategy": "strafe",
+    }
 
 
 # ===========================================================================
@@ -1018,9 +1078,12 @@ def _losing(decision="", **_):
 
 
 CONDITION_PREDICATES = {
-    "低血量": _low_hp, "血量低于四成": _low_hp,
-    "最高威胁": _high_threat, "存在高威胁目标": _high_threat,
-    "敌方数量不超过三个": _few_enemies, "队友": _has_allies,
+    "低血量": _low_hp,
+    "血量低于四成": _low_hp,
+    "最高威胁": _high_threat,
+    "存在高威胁目标": _high_threat,
+    "敌方数量不超过三个": _few_enemies,
+    "队友": _has_allies,
     "战斗评估判为劣势": _losing,
 }
 
@@ -1029,9 +1092,7 @@ def _entry_states_condition(line: str) -> bool:
     low = str(line or "").lower()
     if not (any(m in low for m in CONDITION_MARKERS) or any(m in low for m in EMBEDDED_CONDITIONS)):
         return False
-    if any(g in low for g in GENERIC_MARKERS) and not re.search(r"\d", low):
-        return False
-    return True
+    return not (any(g in low for g in GENERIC_MARKERS) and not re.search(r"\d", low))
 
 
 def parse_condition(line: str) -> dict:
@@ -1051,19 +1112,29 @@ def parse_condition(line: str) -> dict:
     if tag is None:
         return {}
     conds = [c for c in CONDITION_PREDICATES if c in cond_scope]
-    for phrase, key in (("低血量", "低血量"), ("血量不足", "低血量"),
-                        ("被夹击", "战斗评估判为劣势"), ("残兵", "战斗评估判为劣势")):
+    for phrase, key in (
+        ("低血量", "低血量"),
+        ("血量不足", "低血量"),
+        ("被夹击", "战斗评估判为劣势"),
+        ("残兵", "战斗评估判为劣势"),
+    ):
         if phrase in cond_scope and key not in conds:
             conds.append(key)
     return {"tag": tag, "conditions": conds} if conds else {}
 
 
-def condition_matches(conds, hp_ratio=1.0, threat_ratio_=0.0, n_enemies=0,
-                      has_allies=False, decision="") -> bool:
+def condition_matches(
+    conds, hp_ratio=1.0, threat_ratio_=0.0, n_enemies=0, has_allies=False, decision=""
+) -> bool:
     if not conds:
         return False
-    ctx = dict(hp_ratio=hp_ratio, threat_ratio=threat_ratio_, n_enemies=n_enemies,
-               has_allies=has_allies, decision=decision)
+    ctx = {
+        "hp_ratio": hp_ratio,
+        "threat_ratio": threat_ratio_,
+        "n_enemies": n_enemies,
+        "has_allies": has_allies,
+        "decision": decision,
+    }
     for c in conds:
         pred = CONDITION_PREDICATES.get(c)
         if pred is None:
@@ -1110,8 +1181,9 @@ def knowledge_gate(decision: str, tactics: list, hp_ratio=1.0, threat_ratio_=0.0
     return False
 
 
-def apply_tactics(decision: str, tactics: list, has_allies=False, hp_ratio=1.0,
-                  threat_ratio_=0.0, n_enemies=0) -> str:
+def apply_tactics(
+    decision: str, tactics: list, has_allies=False, hp_ratio=1.0, threat_ratio_=0.0, n_enemies=0
+) -> str:
     """把命中战术翻译成动作倾向；无影响返回空串。"""
     if not tactics:
         return ""
@@ -1120,8 +1192,14 @@ def apply_tactics(decision: str, tactics: list, has_allies=False, hp_ratio=1.0,
         if isinstance(item, (tuple, list)) and item:
             tag = item[0]
             conds = list(item[1]) if len(item) > 1 and isinstance(item[1], (list, tuple)) else []
-            if not condition_matches(conds, hp_ratio=hp_ratio, threat_ratio_=threat_ratio_,
-                                     n_enemies=n_enemies, has_allies=has_allies, decision=decision):
+            if not condition_matches(
+                conds,
+                hp_ratio=hp_ratio,
+                threat_ratio_=threat_ratio_,
+                n_enemies=n_enemies,
+                has_allies=has_allies,
+                decision=decision,
+            ):
                 continue
             tags.add(tag)
         else:
@@ -1136,13 +1214,18 @@ def apply_tactics(decision: str, tactics: list, has_allies=False, hp_ratio=1.0,
     return ""
 
 
-def decide_action(decision, tactics, hp_ratio=1.0, threat_ratio_=0.0,
-                  has_allies=False, n_enemies=0) -> str:
+def decide_action(decision, tactics, hp_ratio=1.0, threat_ratio_=0.0, has_allies=False, n_enemies=0) -> str:
     """闸门 + 规则映射。"""
     if not knowledge_gate(decision, tactics, hp_ratio, threat_ratio_):
         return ""
-    return apply_tactics(decision, tactics, has_allies=has_allies, hp_ratio=hp_ratio,
-                         threat_ratio_=threat_ratio_, n_enemies=n_enemies)
+    return apply_tactics(
+        decision,
+        tactics,
+        has_allies=has_allies,
+        hp_ratio=hp_ratio,
+        threat_ratio_=threat_ratio_,
+        n_enemies=n_enemies,
+    )
 
 
 def _with_condition(tactic: str) -> str:
@@ -1168,9 +1251,11 @@ def seed_knowledge(game: str = None, force: bool = False) -> list:
     pred = prof.get("predictor") or {}
     tactics = [str(t) for t in (combat.get("tactics") or []) if str(t).strip()]
     if not tactics:
-        tactics = ["血量不足且附近存在高威胁实体时立即撤退，不要恋战",
-                   "与高威胁实体保持距离，等其转移后再回场",
-                   "低威胁目标主动集火清理，保持场面干净"]
+        tactics = [
+            "血量不足且附近存在高威胁实体时立即撤退，不要恋战",
+            "与高威胁实体保持距离，等其转移后再回场",
+            "低威胁目标主动集火清理，保持场面干净",
+        ]
     lines = "\n".join(f"- 战术: {_with_condition(t)}" for t in tactics)
     top = []
     for key in ("rarity_highest_boss", "rarity_boss", "rarity_elite"):
@@ -1182,13 +1267,17 @@ def seed_knowledge(game: str = None, force: bool = False) -> list:
             break
     desc = (prof.get("game") or {}).get("description", "")
     docs = {
-        "tactics": (f"# {g} 战术知识（seed）\n\n{desc}\n\n## 战术条目\n{lines}\n\n"
-                    "## 使用说明\n- 由 agent.py 依据档案 combat.tactics 生成\n"
-                    "- 条目带「适用条件」，条件不满足时不参与决策\n"),
-        "boss_guide": (f"# {g} 高威胁目标指南（seed）\n\n## 最高威胁实体\n"
-                       f"- {'、'.join(top) if top else '未声明'}\n\n## 应对原则\n"
-                       "- 最高威胁目标出现时优先判断打/跑；血量不足立即撤退并拉开距离\n"
-                       "- 中低威胁目标可在保持距离的前提下集火清理\n- 组队时优先保护队友输出位\n"),
+        "tactics": (
+            f"# {g} 战术知识（seed）\n\n{desc}\n\n## 战术条目\n{lines}\n\n"
+            "## 使用说明\n- 由 agent.py 依据档案 combat.tactics 生成\n"
+            "- 条目带「适用条件」，条件不满足时不参与决策\n"
+        ),
+        "boss_guide": (
+            f"# {g} 高威胁目标指南（seed）\n\n## 最高威胁实体\n"
+            f"- {'、'.join(top) if top else '未声明'}\n\n## 应对原则\n"
+            "- 最高威胁目标出现时优先判断打/跑；血量不足立即撤退并拉开距离\n"
+            "- 中低威胁目标可在保持距离的前提下集火清理\n- 组队时优先保护队友输出位\n"
+        ),
     }
     d = kb_game_dir(g)
     os.makedirs(d, exist_ok=True)
@@ -1213,7 +1302,7 @@ class LearningStats:
 
     def _load(self) -> dict:
         try:
-            with open(self.PATH, "r", encoding="utf-8") as f:
+            with open(self.PATH, encoding="utf-8") as f:
                 d = json.load(f)
             return d if isinstance(d, dict) else {}
         except Exception:
@@ -1252,22 +1341,36 @@ class Perception:
 
     def _load_mock(self) -> dict:
         prof = _read_yaml(os.path.join(PROFILE_DIR, f"{safe_name(active_game())}.yaml"))
-        m = ((prof.get("perception") or {}).get("mock") or {})
+        m = (prof.get("perception") or {}).get("mock") or {}
         if not m:
-            m = {"drift": True, "afk_popup": False,
-                 "player": {"alive": True, "hp": 100, "max_hp": 100, "x": 960, "y": 540,
-                            "power_score": 120, "petal_set": "combat", "talent": "none"},
-                 "entities": [{"raw_id": "hornet", "rarity": "Common", "x": 400, "y": 300, "vx": 80, "vy": 0},
-                              {"raw_id": "beetle", "rarity": "Epic", "x": 1500, "y": 350, "vx": -30, "vy": -30},
-                              {"raw_id": "mantis", "rarity": "Super", "x": 1700, "y": 800, "vx": 0, "vy": 0}],
-                 "teammates": []}
+            m = {
+                "drift": True,
+                "afk_popup": False,
+                "player": {
+                    "alive": True,
+                    "hp": 100,
+                    "max_hp": 100,
+                    "x": 960,
+                    "y": 540,
+                    "power_score": 120,
+                    "petal_set": "combat",
+                    "talent": "none",
+                },
+                "entities": [
+                    {"raw_id": "hornet", "rarity": "Common", "x": 400, "y": 300, "vx": 80, "vy": 0},
+                    {"raw_id": "beetle", "rarity": "Epic", "x": 1500, "y": 350, "vx": -30, "vy": -30},
+                    {"raw_id": "mantis", "rarity": "Super", "x": 1700, "y": 800, "vx": 0, "vy": 0},
+                ],
+                "teammates": [],
+            }
         self._state = [dict(e) for e in (m.get("entities") or [])]
         self._t0 = time.time()
         return m
 
     def backend(self) -> str:
-        b = (os.getenv("UGF_PERCEPTION_BACKEND") or "").strip().lower() or \
-            str(cfg_get("perception.backend", "auto")).lower()
+        b = (os.getenv("UGF_PERCEPTION_BACKEND") or "").strip().lower() or str(
+            cfg_get("perception.backend", "auto")
+        ).lower()
         if b == "auto":
             return "mock" if dry_run() else "http"
         return b if b in ("mock", "http") else "mock"
@@ -1281,17 +1384,26 @@ class Perception:
             if drift:
                 e["x"] = max(10, min(sw - 10, safe_float(e.get("x")) + safe_float(e.get("vx")) * dt))
                 e["y"] = max(10, min(sh - 10, safe_float(e.get("y")) + safe_float(e.get("vy")) * dt))
-            ents.append({"raw_id": e.get("raw_id"), "rarity": e.get("rarity"),
-                         "x": round(safe_float(e.get("x")), 1), "y": round(safe_float(e.get("y")), 1)})
+            ents.append(
+                {
+                    "raw_id": e.get("raw_id"),
+                    "rarity": e.get("rarity"),
+                    "x": round(safe_float(e.get("x")), 1),
+                    "y": round(safe_float(e.get("y")), 1),
+                }
+            )
         player = dict(self._mock.get("player") or {})
         # 玩家缓慢绕圈，方便观察走位
         ang = (time.time() - self._t0) * 0.6
         player["x"] = round(960 + 220 * math.cos(ang), 1)
         player["y"] = round(540 + 140 * math.sin(ang), 1)
-        return {"player": player, "entities": ents,
-                "teammates": [dict(t) for t in (self._mock.get("teammates") or [])],
-                "afk_popup": bool(self._mock.get("afk_popup", False)),
-                "_fallback": "mock"}
+        return {
+            "player": player,
+            "entities": ents,
+            "teammates": [dict(t) for t in (self._mock.get("teammates") or [])],
+            "afk_popup": bool(self._mock.get("afk_popup", False)),
+            "_fallback": "mock",
+        }
 
     def _http_frame(self) -> dict:
         try:
@@ -1370,6 +1482,7 @@ def _enable_windows_dpi():
         return
     try:
         import ctypes
+
         try:
             ctypes.windll.shcore.SetProcessDpiAwareness(1)
         except Exception:
@@ -1420,9 +1533,13 @@ def game_action(action_type: str, x=None, y=None) -> str:
     if action_type == "move":
         _human_move(int(x), int(y))
     elif action_type == "attack":
-        pyautogui.keyDown("space"); time.sleep(0.2); pyautogui.keyUp("space")
+        pyautogui.keyDown("space")
+        time.sleep(0.2)
+        pyautogui.keyUp("space")
     elif action_type == "defend":
-        pyautogui.keyDown("shift"); time.sleep(0.2); pyautogui.keyUp("shift")
+        pyautogui.keyDown("shift")
+        time.sleep(0.2)
+        pyautogui.keyUp("shift")
     elif action_type == "synthesize":
         pyautogui.press("c")
     else:
@@ -1452,8 +1569,10 @@ def switch_set(set_name: str) -> str:
 
 def handle_afk() -> str:
     """= 原 handle_afk。"""
-    return ("AFK 弹窗处理已触发：结合当前画面里弹窗的坐标，"
-            "用 `python agent.py action move --x <X> --y <Y>` 点击完成验证。")
+    return (
+        "AFK 弹窗处理已触发：结合当前画面里弹窗的坐标，"
+        "用 `python agent.py action move --x <X> --y <Y>` 点击完成验证。"
+    )
 
 
 def mouse_in_corner(screen_w=1920, screen_h=1080, edge=5) -> bool:
@@ -1462,6 +1581,7 @@ def mouse_in_corner(screen_w=1920, screen_h=1080, edge=5) -> bool:
         return False
     try:
         import pyautogui
+
         x, y = pyautogui.position()
     except Exception:
         return False
@@ -1477,12 +1597,21 @@ SNAP_FILE = os.path.join(RUN_LOGS, "agent_snapshot.json")
 
 
 def session_load() -> dict:
-    default = {"game": active_game(), "status": "idle", "last_played": None,
-               "last_rounds": 0, "last_report": "", "brief": None, "sessions": 0,
-               "total_deaths": 0, "resumed": False, "resume_point": None,
-               "started_at": datetime.now().isoformat(timespec="seconds")}
+    default = {
+        "game": active_game(),
+        "status": "idle",
+        "last_played": None,
+        "last_rounds": 0,
+        "last_report": "",
+        "brief": None,
+        "sessions": 0,
+        "total_deaths": 0,
+        "resumed": False,
+        "resume_point": None,
+        "started_at": datetime.now().isoformat(timespec="seconds"),
+    }
     try:
-        with open(STATE_FILE, "r", encoding="utf-8") as f:
+        with open(STATE_FILE, encoding="utf-8") as f:
             st = json.load(f)
     except Exception:
         return default
@@ -1505,9 +1634,16 @@ def session_record_start(game: str) -> bool:
     st = session_load()
     prev = safe_int(st.get("last_rounds"))
     resumable = bool(st.get("last_played")) or prev > 0
-    st["resume_point"] = ({"game": game, "at": datetime.now().isoformat(timespec="seconds"),
-                           "from_rounds": prev, "deaths": safe_int(st.get("total_deaths"))}
-                          if resumable else None)
+    st["resume_point"] = (
+        {
+            "game": game,
+            "at": datetime.now().isoformat(timespec="seconds"),
+            "from_rounds": prev,
+            "deaths": safe_int(st.get("total_deaths")),
+        }
+        if resumable
+        else None
+    )
     session_save(st)
     return resumable
 
@@ -1515,19 +1651,29 @@ def session_record_start(game: str) -> bool:
 def session_record_end(game: str, rounds: int, deaths: int, report: str = ""):
     st = session_load()
     rounds, deaths = safe_int(rounds), safe_int(deaths)
-    st.update({"game": game, "status": "done",
-               "last_played": datetime.now().isoformat(timespec="seconds"),
-               "last_rounds": rounds, "last_report": report or "",
-               "sessions": safe_int(st.get("sessions")) + 1,
-               "total_deaths": safe_int(st.get("total_deaths")) + max(0, deaths),
-               "resumed": False, "resume_point": None})
+    st.update(
+        {
+            "game": game,
+            "status": "done",
+            "last_played": datetime.now().isoformat(timespec="seconds"),
+            "last_rounds": rounds,
+            "last_report": report or "",
+            "sessions": safe_int(st.get("sessions")) + 1,
+            "total_deaths": safe_int(st.get("total_deaths")) + max(0, deaths),
+            "resumed": False,
+            "resume_point": None,
+        }
+    )
     session_save(st)
     _history_append({"at": st["last_played"], "game": game, "rounds": rounds, "deaths": deaths})
 
 
 def _history_append(record: dict):
+    h = []
     try:
-        h = json.load(open(HISTORY_FILE, "r", encoding="utf-8")) if os.path.exists(HISTORY_FILE) else []
+        if os.path.exists(HISTORY_FILE):
+            with open(HISTORY_FILE, encoding="utf-8") as f:
+                h = json.load(f)
         if not isinstance(h, list):
             h = []
     except Exception:
@@ -1546,10 +1692,12 @@ def session_summary() -> str:
     played = [r for r in _read_json(HISTORY_FILE, []) if isinstance(r, dict)]
     total_rounds = sum(safe_int(r.get("rounds")) for r in played)
     total_deaths = sum(safe_int(r.get("deaths")) for r in played)
-    line = (f"会话：玩过 {safe_int(st.get('sessions'))} 场 ｜ 本次/上次回合 {safe_int(st.get('last_rounds'))} "
-            f"｜ 累计死亡 {safe_int(st.get('total_deaths'))}\n"
-            f"战绩历史：{len(played)} 局，合计 {total_rounds} 回合 / {total_deaths} 死亡\n"
-            f"上次游玩：{st.get('last_played') or '（无）'}")
+    line = (
+        f"会话：玩过 {safe_int(st.get('sessions'))} 场 ｜ 本次/上次回合 {safe_int(st.get('last_rounds'))} "
+        f"｜ 累计死亡 {safe_int(st.get('total_deaths'))}\n"
+        f"战绩历史：{len(played)} 局，合计 {total_rounds} 回合 / {total_deaths} 死亡\n"
+        f"上次游玩：{st.get('last_played') or '（无）'}"
+    )
     return line
 
 
@@ -1558,13 +1706,15 @@ def resume_info() -> str:
     rp = st.get("resume_point")
     if not rp or st.get("resumed"):
         return ""
-    return (f"检测到上次进度：游戏={rp.get('game')}，上次打了 {rp.get('from_rounds')} 回合，"
-            f"累计死亡 {rp.get('deaths')} —— 本次将接着往下打。")
+    return (
+        f"检测到上次进度：游戏={rp.get('game')}，上次打了 {rp.get('from_rounds')} 回合，"
+        f"累计死亡 {rp.get('deaths')} —— 本次将接着往下打。"
+    )
 
 
 def _read_json(path: str, default):
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return default
@@ -1576,8 +1726,11 @@ def _read_json(path: str, default):
 def should_review(state: dict) -> bool:
     """只有 highest_boss / boss / 组队局才生成复盘（普通小怪局不写，省硬盘）。"""
     ents = state.get("entities") or []
-    has_boss = any(e.get("rarity", "").capitalize() in ("Super", "Unique", "Eternal") for e in ents
-                   if isinstance(e, dict))
+    has_boss = any(
+        e.get("rarity", "").capitalize() in ("Super", "Unique", "Eternal")
+        for e in ents
+        if isinstance(e, dict)
+    )
     return has_boss or bool(state.get("teammates"))
 
 
@@ -1588,14 +1741,19 @@ def review_round(survived: bool, note: str, state: dict) -> str:
     player = state.get("player") if isinstance(state.get("player"), dict) else {}
     set_info = player.get("petal_set", "未知")
     ents = [e for e in (state.get("entities") or []) if isinstance(e, dict)]
-    monster = "、".join(f"{e.get('raw_id','?')}({e.get('rarity','?')})" for e in ents[:5]) or "未知"
+    monster = "、".join(f"{e.get('raw_id', '?')}({e.get('rarity', '?')})" for e in ents[:5]) or "未知"
     cause = note if survived else f"死亡。当时面对怪物: {monster}，自身套装: {set_info}"
-    content = (f"# 对局复盘 — {ts}\n\n- 结果: {outcome}\n- 面对怪物: {monster}\n"
-               f"- 自身套装: {set_info}\n- 死亡原因: {cause}\n- 可改进点: {note}\n")
+    content = (
+        f"# 对局复盘 — {ts}\n\n- 结果: {outcome}\n- 面对怪物: {monster}\n"
+        f"- 自身套装: {set_info}\n- 死亡原因: {cause}\n- 可改进点: {note}\n"
+    )
     hist = kb_search("对局复盘", game=active_game())
     content += "\n## 与历史对局对比\n"
-    content += (f"- 历史上有同类怪物({monster})的复盘，可回顾上次决策差异\n"
-                if monster != "未知" and monster in hist else "- 暂无同怪物历史复盘\n")
+    content += (
+        f"- 历史上有同类怪物({monster})的复盘，可回顾上次决策差异\n"
+        if monster != "未知" and monster in hist
+        else "- 暂无同怪物历史复盘\n"
+    )
     kb_write(f"review_{ts}", content, game=active_game())
     PREDICTOR.reset()
     return f"[复盘] 结果={outcome}，已写入知识库，预判历史已清空"
@@ -1620,8 +1778,7 @@ def analyze_boss_behavior(samples: list) -> str:
     dists = [((px - ex) ** 2 + (py - ey) ** 2) ** 0.5 for ex, ey, px, py in samples]
     avg_d = sum(dists) / len(dists)
     close = sum(1 for d in dists if d < safe_float(cfg_get("agent.boss_close_dist", 120), 120))
-    return (f"{pattern}；平均距离玩家约 {avg_d:.0f}px；"
-            f"近距离接近 {close} 次（越接近越凶/仇恨越强）")
+    return f"{pattern}；平均距离玩家约 {avg_d:.0f}px；近距离接近 {close} 次（越接近越凶/仇恨越强）"
 
 
 def write_boss_memory(observations: list, samples: dict) -> str:
@@ -1636,18 +1793,31 @@ def write_boss_memory(observations: list, samples: dict) -> str:
     return kb_append("boss_behavior_log", content)
 
 
-def write_snapshot(rounds: int, deaths: int, player: dict, predictions: list,
-                   combat_eval: dict, game: str):
+def write_snapshot(rounds: int, deaths: int, player: dict, predictions: list, combat_eval: dict, game: str):
     """每 N 回合写一次快照，供汇报/大盘读取。"""
-    threats = [{"name": e.get("raw_id"), "cat": e.get("category"),
-                "threat": e.get("threat_score"), "x": e.get("x_predict") or e.get("x_now"),
-                "y": e.get("y_predict") or e.get("y_now")}
-               for e in (predictions or [])[:8] if isinstance(e, dict)]
-    snap = {"ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "game": game,
-            "round": rounds, "deaths": deaths, "hp": player.get("hp"),
-            "max_hp": player.get("max_hp"), "decision": combat_eval.get("decision"),
-            "mindset": combat_eval.get("mindset"), "set": combat_eval.get("recommended_set"),
-            "threats": threats}
+    threats = [
+        {
+            "name": e.get("raw_id"),
+            "cat": e.get("category"),
+            "threat": e.get("threat_score"),
+            "x": e.get("x_predict") or e.get("x_now"),
+            "y": e.get("y_predict") or e.get("y_now"),
+        }
+        for e in (predictions or [])[:8]
+        if isinstance(e, dict)
+    ]
+    snap = {
+        "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "game": game,
+        "round": rounds,
+        "deaths": deaths,
+        "hp": player.get("hp"),
+        "max_hp": player.get("max_hp"),
+        "decision": combat_eval.get("decision"),
+        "mindset": combat_eval.get("mindset"),
+        "set": combat_eval.get("recommended_set"),
+        "threats": threats,
+    }
     try:
         os.makedirs(RUN_LOGS, exist_ok=True)
         with open(SNAP_FILE, "w", encoding="utf-8") as f:
@@ -1664,7 +1834,7 @@ def _tail_log(n: int = 10) -> list:
     if not os.path.exists(p):
         return []
     try:
-        with open(p, "r", encoding="utf-8") as f:
+        with open(p, encoding="utf-8") as f:
             return f.read().splitlines()[-n:]
     except OSError:
         return []
@@ -1675,23 +1845,38 @@ def generate_report() -> str:
     snap = _read_json(SNAP_FILE, {})
     if not isinstance(snap, dict):
         snap = {}
-    lines = ["# Universal-Game-Framework 对局报告", "",
-             f"- 生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-             f"- 当前游戏：{snap.get('game') or st.get('game') or active_game()}",
-             f"- 会话状态：{st.get('status', 'idle')}",
-             f"- 本局回合数：{safe_int(snap.get('round'))}",
-             f"- 累计死亡：{safe_int(snap.get('deaths'))}",
-             (f"- HP：{snap.get('hp')}/{snap.get('max_hp')}"
-              if snap.get("hp") is not None else "- HP：未知（无快照）"), ""]
+    lines = [
+        "# Universal-Game-Framework 对局报告",
+        "",
+        f"- 生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"- 当前游戏：{snap.get('game') or st.get('game') or active_game()}",
+        f"- 会话状态：{st.get('status', 'idle')}",
+        f"- 本局回合数：{safe_int(snap.get('round'))}",
+        f"- 累计死亡：{safe_int(snap.get('deaths'))}",
+        (
+            f"- HP：{snap.get('hp')}/{snap.get('max_hp')}"
+            if snap.get("hp") is not None
+            else "- HP：未知（无快照）"
+        ),
+        "",
+    ]
     if snap.get("decision"):
-        lines += ["## 最新战斗",
-                  f"- 决策：{snap.get('decision')} / 心态：{snap.get('mindset')} / 推荐套装：{snap.get('set')}"]
+        lines += [
+            "## 最新战斗",
+            f"- 决策：{snap.get('decision')} / 心态：{snap.get('mindset')} / 推荐套装：{snap.get('set')}",
+        ]
         if snap.get("threats"):
             lines.append("- 近期威胁预判：")
             for t in snap["threats"][:5]:
-                lines.append(f"  - {t.get('name') or t.get('cat')}：威胁 {t.get('threat')} @({t.get('x')}, {t.get('y')})")
-    lines += ["", f"## 知识闭环\n{LEARNING_STATS.summary(active_game())}",
-              "", f"## 调参状态\n{auto_tuner_status()}"]
+                lines.append(
+                    f"  - {t.get('name') or t.get('cat')}：威胁 {t.get('threat')} @({t.get('x')}, {t.get('y')})"
+                )
+    lines += [
+        "",
+        f"## 知识闭环\n{LEARNING_STATS.summary(active_game())}",
+        "",
+        f"## 调参状态\n{auto_tuner_status()}",
+    ]
     tl = _tail_log()
     if tl:
         lines += ["", "## 最近日志"] + [f"- {x}" for x in tl]
@@ -1718,8 +1903,11 @@ def push_webhook(text: str) -> tuple:
         r = requests.post(url, json={"text": text}, timeout=5)
     except Exception as e:
         return False, f"请求异常: {type(e).__name__}"
-    return (True, f"HTTP {r.status_code}") if 200 <= getattr(r, "status_code", 0) < 300 \
+    return (
+        (True, f"HTTP {r.status_code}")
+        if 200 <= getattr(r, "status_code", 0) < 300
         else (False, f"HTTP {getattr(r, 'status_code', '?')}")
+    )
 
 
 def notify(quiet: bool = False) -> list:
@@ -1744,9 +1932,11 @@ def notify(quiet: bool = False) -> list:
 
 def notify_progress(rounds: int, deaths: int) -> list:
     """局中轻量进度：覆盖写 run_logs/progress_report.md。"""
-    text = (f"# Universal-Game-Framework 局中进度\n\n"
-            f"- 更新：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-            f"- 游戏：{active_game()}\n- 回合：{rounds}\n- 累计死亡：{deaths}\n")
+    text = (
+        f"# Universal-Game-Framework 局中进度\n\n"
+        f"- 更新：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        f"- 游戏：{active_game()}\n- 回合：{rounds}\n- 累计死亡：{deaths}\n"
+    )
     try:
         os.makedirs(RUN_LOGS, exist_ok=True)
         with open(os.path.join(RUN_LOGS, "progress_report.md"), "w", encoding="utf-8") as f:
@@ -1774,13 +1964,20 @@ def _clamp(v, lo, hi, default):
 def auto_tuner_current() -> dict:
     o = _read_yaml(TUNED_PATH)
     return {
-        "combat.retreat_ratio": _clamp((o.get("combat") or {}).get("retreat_ratio",
-                                     cfg_get("combat.retreat_ratio", 1.0)),
-                                       RETREAT_RATIO_MIN, RETREAT_RATIO_MAX, 1.0),
+        "combat.retreat_ratio": _clamp(
+            (o.get("combat") or {}).get("retreat_ratio", cfg_get("combat.retreat_ratio", 1.0)),
+            RETREAT_RATIO_MIN,
+            RETREAT_RATIO_MAX,
+            1.0,
+        ),
         "predictor.confidence_threshold": _clamp(
-            (o.get("predictor") or {}).get("confidence_threshold",
-                                           cfg_get("predictor.confidence_threshold", 0.65)),
-            CONF_THRESH_MIN, CONF_THRESH_MAX, 0.65),
+            (o.get("predictor") or {}).get(
+                "confidence_threshold", cfg_get("predictor.confidence_threshold", 0.65)
+            ),
+            CONF_THRESH_MIN,
+            CONF_THRESH_MAX,
+            0.65,
+        ),
     }
 
 
@@ -1788,9 +1985,11 @@ def auto_tuner_status() -> str:
     c = auto_tuner_current()
     o = _read_yaml(TUNED_PATH)
     hold = safe_int(o.get("_cooldown", 0))
-    return (f"retreat_ratio={c['combat.retreat_ratio']} ｜ "
-            f"confidence_threshold={c['predictor.confidence_threshold']}"
-            + (f" ｜ 冷静期剩 {hold} 周期" if hold else ""))
+    return (
+        f"retreat_ratio={c['combat.retreat_ratio']} ｜ "
+        f"confidence_threshold={c['predictor.confidence_threshold']}"
+        + (f" ｜ 冷静期剩 {hold} 周期" if hold else "")
+    )
 
 
 def auto_tune(hits: int = 0, attempts: int = 0, deaths_extra: int = 0) -> str:
@@ -1804,16 +2003,25 @@ def auto_tune(hits: int = 0, attempts: int = 0, deaths_extra: int = 0) -> str:
         return f"[调参] 冷静期(剩 {cooldown - 1} 周期)，本轮不调整"
 
     if deaths_extra > 0:
-        cur = _clamp((o.get("combat") or {}).get("retreat_ratio", cfg_get("combat.retreat_ratio", 1.0)),
-                     RETREAT_RATIO_MIN, RETREAT_RATIO_MAX, 1.0)
+        cur = _clamp(
+            (o.get("combat") or {}).get("retreat_ratio", cfg_get("combat.retreat_ratio", 1.0)),
+            RETREAT_RATIO_MIN,
+            RETREAT_RATIO_MAX,
+            1.0,
+        )
         nxt = max(RETREAT_RATIO_MIN, cur - 0.1 * int(deaths_extra))
         if nxt < cur:
             o.setdefault("combat", {})["retreat_ratio"] = round(nxt, 2)
             changed.append(f"retreat_ratio {cur}→{nxt:.2f}(死亡增多，更早跑)")
     if attempts > 0 and hits / attempts < 0.5:
-        cur = _clamp((o.get("predictor") or {}).get(
-            "confidence_threshold", cfg_get("predictor.confidence_threshold", 0.65)),
-            CONF_THRESH_MIN, CONF_THRESH_MAX, 0.65)
+        cur = _clamp(
+            (o.get("predictor") or {}).get(
+                "confidence_threshold", cfg_get("predictor.confidence_threshold", 0.65)
+            ),
+            CONF_THRESH_MIN,
+            CONF_THRESH_MAX,
+            0.65,
+        )
         nxt = max(CONF_THRESH_MIN, cur - 0.05)
         if nxt < cur:
             o.setdefault("predictor", {})["confidence_threshold"] = round(nxt, 2)
@@ -1828,6 +2036,7 @@ def auto_tune(hits: int = 0, attempts: int = 0, deaths_extra: int = 0) -> str:
 def _write_tuned(data: dict):
     try:
         import yaml
+
         with open(TUNED_PATH, "w", encoding="utf-8") as f:
             yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
     except Exception:
@@ -1845,20 +2054,24 @@ def auto_tuner_reset() -> str:
 # ===========================================================================
 # 12. 视频学习（抽帧 → VLM 提取战术 → 去重入库）
 # ===========================================================================
-VLM_PROMPT = ("你是游戏战术分析师。看图，用一句话总结一条可执行的战术，"
-              "必须带上适用条件（例如「低血量时…」「被夹击时…」）。只输出这一句话。")
+VLM_PROMPT = (
+    "你是游戏战术分析师。看图，用一句话总结一条可执行的战术，"
+    "必须带上适用条件（例如「低血量时…」「被夹击时…」）。只输出这一句话。"
+)
 
 
 def _write_png(path: str, width: int, height: int, rgb: tuple) -> str:
     """标准库写纯色 PNG（无 cv2/PIL 时的最小可用实现）。"""
     import struct
     import zlib
+
     row = b"\x00" + bytes(rgb) * width
     raw = row * height
 
     def chunk(tag, data):
-        return (struct.pack(">I", len(data)) + tag + data
-                + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF))
+        return (
+            struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+        )
 
     png = b"\x89PNG\r\n\x1a\n"
     png += chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
@@ -1919,14 +2132,26 @@ def vlm_extract_tactic(b64_img: str) -> str:
         return "[未配置 VLM_API_URL / VLM_API_KEY，跳过 VLM]"
     try:
         import requests
-        payload = {"model": os.getenv("VLM_MODEL", ""),
-                   "messages": [{"role": "user", "content": [
-                       {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_img}"}},
-                       {"type": "text", "text": VLM_PROMPT}]}],
-                   "max_tokens": 200}
-        r = requests.post(url, headers={"Authorization": f"Bearer {key}",
-                                        "Content-Type": "application/json"},
-                          json=payload, timeout=30)
+
+        payload = {
+            "model": os.getenv("VLM_MODEL", ""),
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_img}"}},
+                        {"type": "text", "text": VLM_PROMPT},
+                    ],
+                }
+            ],
+            "max_tokens": 200,
+        }
+        r = requests.post(
+            url,
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            json=payload,
+            timeout=30,
+        )
         r.raise_for_status()
         return r.json()["choices"][0]["message"]["content"].strip()
     except Exception as e:
@@ -1945,7 +2170,8 @@ def _dedup_new(tactics: list, target_dir: str, ratio: float = 0.75) -> list:
         for f in os.listdir(target_dir):
             if f.startswith("video_tactic_") and f.endswith(".md"):
                 try:
-                    known.append(open(os.path.join(target_dir, f), "r", encoding="utf-8").read())
+                    with open(os.path.join(target_dir, f), encoding="utf-8") as fk:
+                        known.append(fk.read())
                 except OSError:
                     continue
     known_lines = []
@@ -1953,7 +2179,7 @@ def _dedup_new(tactics: list, target_dir: str, ratio: float = 0.75) -> list:
         s = line.strip()
         for prefix in ("- ", "* "):
             if s.startswith(prefix):
-                s = s[len(prefix):].strip()
+                s = s[len(prefix) :].strip()
         if ". " in s[:5] and s[:1].isdigit():
             s = s.split(". ", 1)[1].strip()
         if s and not s.startswith(("#", ">", "!")):
@@ -1968,8 +2194,9 @@ def _dedup_new(tactics: list, target_dir: str, ratio: float = 0.75) -> list:
     return out
 
 
-def learn_from_video(video_path: str = None, frame_count: int = 5, skip: int = 25,
-                     cleanup: bool = True) -> dict:
+def learn_from_video(
+    video_path: str = None, frame_count: int = 5, skip: int = 25, cleanup: bool = True
+) -> dict:
     """一次完整学习：抽帧 → 逐帧 VLM → 去重 → 入库 → 清理临时帧。"""
     frames = extract_frames(video_path, skip) if video_path else []
     mode = "真实抽帧" if frames else "合成帧(离线降级)"
@@ -1991,10 +2218,12 @@ def learn_from_video(video_path: str = None, frame_count: int = 5, skip: int = 2
     kept = _dedup_new(tactics, target)
     name = os.path.splitext(os.path.basename(video_path))[0] if video_path else "offline"
     fn = f"video_tactic_{safe_name(name)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
-    content = (f"# 视频学习战术 — {video_path or '(离线合成)'}\n\n"
-               f"> 学习时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-               f"> 提取帧数: {len(tactics)}，去重后 {len(kept)} 条\n\n## 战术列表\n\n"
-               + "".join(f"{i}. {t}\n" for i, t in enumerate(kept, 1)))
+    content = (
+        f"# 视频学习战术 — {video_path or '(离线合成)'}\n\n"
+        f"> 学习时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        f"> 提取帧数: {len(tactics)}，去重后 {len(kept)} 条\n\n## 战术列表\n\n"
+        + "".join(f"{i}. {t}\n" for i, t in enumerate(kept, 1))
+    )
     path = os.path.join(target, fn)
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
@@ -2008,11 +2237,23 @@ def download_video(url: str) -> str:
     dest = os.path.join(FRAME_DIR, "_dl")
     os.makedirs(dest, exist_ok=True)
     import subprocess
+
     try:
-        subprocess.run(["yt-dlp", "-f", "b[ext=mp4]/bv*+ba/b",
-                        "-o", os.path.join(dest, "video.%(ext)s"),
-                        "--merge-output-format", "mp4", url],
-                       capture_output=True, text=True, timeout=300)
+        subprocess.run(
+            [
+                "yt-dlp",
+                "-f",
+                "b[ext=mp4]/bv*+ba/b",
+                "-o",
+                os.path.join(dest, "video.%(ext)s"),
+                "--merge-output-format",
+                "mp4",
+                url,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
     except Exception as e:
         return f"下载失败: {e}"
     for f in os.listdir(dest):
@@ -2041,19 +2282,28 @@ def llm_decide(state: dict, predictions: list, combat_eval: dict, kb_text: str) 
         return fallback_decide(state, combat_eval, kb_text)
     try:
         import requests
+
         payload = {
             "model": os.getenv("LLM_MODEL", ""),
-            "messages": [{"role": "system", "content": SYSTEM_PROMPT},
-                         {"role": "user", "content":
-                          f"当前游戏状态:\n{json.dumps(state, ensure_ascii=False)}\n\n"
-                          f"实体预判(未来1.2秒):\n{json.dumps(predictions, ensure_ascii=False)}\n\n"
-                          f"战斗评估:\n{json.dumps(combat_eval, ensure_ascii=False)}\n\n"
-                          f"知识库战术:\n{kb_text}\n\n请输出下一步动作的 JSON。"}],
-            "max_tokens": 800, "temperature": 0.3,
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": f"当前游戏状态:\n{json.dumps(state, ensure_ascii=False)}\n\n"
+                    f"实体预判(未来1.2秒):\n{json.dumps(predictions, ensure_ascii=False)}\n\n"
+                    f"战斗评估:\n{json.dumps(combat_eval, ensure_ascii=False)}\n\n"
+                    f"知识库战术:\n{kb_text}\n\n请输出下一步动作的 JSON。",
+                },
+            ],
+            "max_tokens": 800,
+            "temperature": 0.3,
         }
-        r = requests.post(url, headers={"Authorization": f"Bearer {key}",
-                                        "Content-Type": "application/json"},
-                          json=payload, timeout=15)
+        r = requests.post(
+            url,
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            json=payload,
+            timeout=15,
+        )
         r.raise_for_status()
         content = r.json()["choices"][0]["message"]["content"].strip()
         if "```" in content:
@@ -2077,9 +2327,14 @@ def fallback_decide(state: dict, combat_eval: dict, kb_text: str = "") -> dict:
     max_hp = max(1.0, safe_float(player.get("max_hp"), 100))
     hp_ratio = hp / max_hp
     tr = safe_float(combat_eval.get("threat_ratio"))
-    kb_action = decide_action(decision, extract_tactics(kb_text), hp_ratio=hp_ratio,
-                              threat_ratio_=tr, has_allies=bool(state.get("teammates")),
-                              n_enemies=len(state.get("entities") or []))
+    kb_action = decide_action(
+        decision,
+        extract_tactics(kb_text),
+        hp_ratio=hp_ratio,
+        threat_ratio_=tr,
+        has_allies=bool(state.get("teammates")),
+        n_enemies=len(state.get("entities") or []),
+    )
     if kb_action:
         return {"action": kb_action, "source": "kb"}
     if decision == "retreat":
@@ -2100,8 +2355,7 @@ def _autopilot_action(state: dict, predictions: list, ev: dict, kb_text: str) ->
 
 def run_agent(max_rounds: int = 0, interval: float = None) -> dict:
     """主循环：感知 → 预判 → 评估 → 知识 → 决策 → 动作 → 记忆 → 复盘 → 汇报。"""
-    interval = safe_float(interval if interval is not None
-                          else cfg_get("agent.loop_interval", 0.5), 0.5)
+    interval = safe_float(interval if interval is not None else cfg_get("agent.loop_interval", 0.5), 0.5)
     game = active_game()
     perception = Perception()
     evaluator = CombatEvaluator()
@@ -2207,10 +2461,13 @@ def run_agent(max_rounds: int = 0, interval: float = None) -> dict:
             rec = ev.get("recommended_set")
             if rec and rec != current_set:
                 res = switch_set(rec)
-                kb_append("player_tactics",
-                          f"- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} "
-                          f"决策={ev.get('decision')} 心态={ev.get('mindset')} "
-                          f"威胁比={ev.get('threat_ratio')} → 换 {rec} 套", game=game)
+                kb_append(
+                    "player_tactics",
+                    f"- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} "
+                    f"决策={ev.get('decision')} 心态={ev.get('mindset')} "
+                    f"威胁比={ev.get('threat_ratio')} → 换 {rec} 套",
+                    game=game,
+                )
                 log(f"[套装] {current_set} → {rec}（{res}）")
                 current_set = rec
                 set_switches += 1
@@ -2246,11 +2503,13 @@ def run_agent(max_rounds: int = 0, interval: float = None) -> dict:
                 for e in predictions:
                     if e.get("category") not in ("boss", "highest_boss"):
                         continue
-                    uid = f"{e.get('raw_id','?')}({e.get('rarity','?')})"
-                    boss_obs.append(f"{datetime.now().strftime('%H:%M:%S')} {uid} "
-                                    f"位置({e.get('x_now')},{e.get('y_now')}) "
-                                    f"预判({e.get('x_predict')},{e.get('y_predict')}) "
-                                    f"决策={ev.get('decision')}")
+                    uid = f"{e.get('raw_id', '?')}({e.get('rarity', '?')})"
+                    boss_obs.append(
+                        f"{datetime.now().strftime('%H:%M:%S')} {uid} "
+                        f"位置({e.get('x_now')},{e.get('y_now')}) "
+                        f"预判({e.get('x_predict')},{e.get('y_predict')}) "
+                        f"决策={ev.get('decision')}"
+                    )
                     s = boss_samples.setdefault(uid, [])
                     if len(s) >= boss_sample_max:
                         s.pop(0)
@@ -2271,16 +2530,20 @@ def run_agent(max_rounds: int = 0, interval: float = None) -> dict:
             # 11. 学习统计 + 自动调参
             if learn_interval and rounds % learn_interval == 0 and learn_buf:
                 hits = sum(1 for _k, h in learn_buf if h)
-                kb_append("learning_stats",
-                          f"- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} "
-                          f"汇总：{hits}/{len(learn_buf)} 次命中", game=game)
+                kb_append(
+                    "learning_stats",
+                    f"- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 汇总：{hits}/{len(learn_buf)} 次命中",
+                    game=game,
+                )
                 log(auto_tune(hits=hits, attempts=len(learn_buf), deaths_extra=deaths_cycle))
                 learn_buf = []
                 deaths_cycle = 0
 
-            log(f"[回合 {rounds}] HP={player.get('hp')} 敌人={len(predictions)} "
+            log(
+                f"[回合 {rounds}] HP={player.get('hp')} 敌人={len(predictions)} "
                 f"队友={len(teammates)} 决策={ev.get('decision')} 套装={current_set} "
-                f"心态={ev.get('mindset')} → {atype}")
+                f"心态={ev.get('mindset')} → {atype}"
+            )
             time.sleep(interval)
 
     except KeyboardInterrupt:
@@ -2296,10 +2559,19 @@ def run_agent(max_rounds: int = 0, interval: float = None) -> dict:
             log(f"[复盘] 退出前复盘失败: {e}")
         elapsed = time.time() - t_start
         speed = (rounds / elapsed) if elapsed > 0 else 0.0
-        log("[汇总] " + " | ".join([
-            f"回合={rounds}", f"死亡={deaths}", f"跳过帧={skipped}", f"换套={set_switches}",
-            "动作=" + (",".join(f"{k}x{v}" for k, v in sorted(action_counts.items())) or "无"),
-            f"耗时={elapsed:.1f}s（{speed:.1f} 回合/秒）"]))
+        log(
+            "[汇总] "
+            + " | ".join(
+                [
+                    f"回合={rounds}",
+                    f"死亡={deaths}",
+                    f"跳过帧={skipped}",
+                    f"换套={set_switches}",
+                    "动作=" + (",".join(f"{k}x{v}" for k, v in sorted(action_counts.items())) or "无"),
+                    f"耗时={elapsed:.1f}s（{speed:.1f} 回合/秒）",
+                ]
+            )
+        )
         try:
             LEARNING_STATS.save()
             log("[知识] " + LEARNING_STATS.summary(game))
@@ -2313,15 +2585,22 @@ def run_agent(max_rounds: int = 0, interval: float = None) -> dict:
         except Exception as e:
             log(f"[汇报] 收尾失败: {e}")
 
-    return {"rounds": rounds, "deaths": deaths, "skipped": skipped,
-            "set_switches": set_switches, "actions": action_counts,
-            "elapsed": round(time.time() - t_start, 2)}
+    return {
+        "rounds": rounds,
+        "deaths": deaths,
+        "skipped": skipped,
+        "set_switches": set_switches,
+        "actions": action_counts,
+        "elapsed": round(time.time() - t_start, 2),
+    }
 
 
 def runtime_mode_text() -> str:
     m = runtime_mode()
-    return (f"模式={m['mode']} | 感知={m['perception_backend']} | "
-            f"LLM={m['llm']} | VLM={m['vlm']} | 游戏={m['game']}")
+    return (
+        f"模式={m['mode']} | 感知={m['perception_backend']} | "
+        f"LLM={m['llm']} | VLM={m['vlm']} | 游戏={m['game']}"
+    )
 
 
 # ===========================================================================
@@ -2384,8 +2663,12 @@ def profile_check_one(game: str) -> list:
     for key, vals in tiers.items():
         for v in vals:
             if v in seen_pairs:
-                _pc_issue(issues, "ERROR", f"predictor.{key}",
-                          f"稀有度 {v!r} 同时出现在 {seen_pairs[v]} 与 {key}，档位不允许重叠")
+                _pc_issue(
+                    issues,
+                    "ERROR",
+                    f"predictor.{key}",
+                    f"稀有度 {v!r} 同时出现在 {seen_pairs[v]} 与 {key}，档位不允许重叠",
+                )
             seen_pairs[v] = key
 
     threat = pred.get("threat")
@@ -2398,13 +2681,20 @@ def profile_check_one(game: str) -> list:
             _pc_issue(issues, "ERROR", f"predictor.threat.{k}", "缺失（必填）")
         elif not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0:
             _pc_issue(issues, "ERROR", f"predictor.threat.{k}", f"必须为 >=0 的数字，当前: {v!r}")
-    nums = {k: threat.get(k) for k in THREAT_KEYS
-            if isinstance(threat.get(k), (int, float)) and not isinstance(threat.get(k), bool)}
+    nums = {
+        k: threat.get(k)
+        for k in THREAT_KEYS
+        if isinstance(threat.get(k), (int, float)) and not isinstance(threat.get(k), bool)
+    }
     chain = [k for k in ("highest_boss", "boss", "elite", "normal") if k in nums]
-    for a, b in zip(chain, chain[1:]):
+    for a, b in zip(chain, chain[1:], strict=False):
         if nums[a] < nums[b]:
-            _pc_issue(issues, "ERROR", "predictor.threat",
-                      f"单调性倒置：{a}({nums[a]}) < {b}({nums[b]})，要求逐级递减")
+            _pc_issue(
+                issues,
+                "ERROR",
+                "predictor.threat",
+                f"单调性倒置：{a}({nums[a]}) < {b}({nums[b]})，要求逐级递减",
+            )
     if isinstance(threat.get("player_ally"), (int, float)) and threat["player_ally"] != 0:
         _pc_issue(issues, "WARN", "predictor.threat.player_ally", "建议固定为 0（非 0 会干扰威胁求和）")
 
@@ -2426,12 +2716,20 @@ def profile_check_one(game: str) -> list:
     if not cmc:
         _pc_issue(issues, "ERROR", "combat.chase_min_category", "缺失（必填）")
     elif cmc not in VALID_CHASE_CATEGORIES:
-        _pc_issue(issues, "ERROR", "combat.chase_min_category",
-                  f"非法值 {cmc!r}，可选 {'/'.join(VALID_CHASE_CATEGORIES)}")
+        _pc_issue(
+            issues,
+            "ERROR",
+            "combat.chase_min_category",
+            f"非法值 {cmc!r}，可选 {'/'.join(VALID_CHASE_CATEGORIES)}",
+        )
     if sets and not (set(sets) & set(SEMANTIC_SETS)) and not isinstance(combat.get("set_map"), dict):
-        _pc_issue(issues, "WARN", "combat.set_map",
-                  "套装名与决策语义(combat/tank/retreat/chase/team)完全不同名却未声明 set_map，"
-                  "switch_set 会落到「未知套装」")
+        _pc_issue(
+            issues,
+            "WARN",
+            "combat.set_map",
+            "套装名与决策语义(combat/tank/retreat/chase/team)完全不同名却未声明 set_map，"
+            "switch_set 会落到「未知套装」",
+        )
     tactics = combat.get("tactics")
     if not isinstance(tactics, list) or not [t for t in tactics if str(t or "").strip()]:
         _pc_issue(issues, "WARN", "combat.tactics", "缺失或为空（知识库将没有经验可引用）")
@@ -2451,8 +2749,12 @@ def profile_check_one(game: str) -> list:
             _pc_issue(issues, "ERROR", "perception.mock.player.hp", f"必须在 0~max_hp 之间，当前: {hp!r}")
         ps = str(player.get("petal_set") or "").strip().lower()
         if sets and ps and ps not in sets:
-            _pc_issue(issues, "ERROR", "perception.mock.player.petal_set",
-                      f"必须 ∈ combat.sets {sets}，当前: {ps!r}")
+            _pc_issue(
+                issues,
+                "ERROR",
+                "perception.mock.player.petal_set",
+                f"必须 ∈ combat.sets {sets}，当前: {ps!r}",
+            )
         for i, ent in enumerate(mock.get("entities") or []):
             if not isinstance(ent, dict):
                 _pc_issue(issues, "ERROR", f"perception.mock.entities[{i}]", "必须为字典")
@@ -2462,11 +2764,19 @@ def profile_check_one(game: str) -> list:
                     _pc_issue(issues, "ERROR", f"perception.mock.entities[{i}].{field}", "缺失（必填）")
             rar = str(ent.get("rarity") or "").strip().capitalize()
             if all_rarities and rar and rar not in all_rarities:
-                _pc_issue(issues, "ERROR", f"perception.mock.entities[{i}].rarity",
-                          f"{rar!r} 不属于任何已声明稀有度档位（离线链路会跑不通）")
+                _pc_issue(
+                    issues,
+                    "ERROR",
+                    f"perception.mock.entities[{i}].rarity",
+                    f"{rar!r} 不属于任何已声明稀有度档位（离线链路会跑不通）",
+                )
         if "teammates" not in mock:
-            _pc_issue(issues, "WARN", "perception.mock.teammates",
-                      "未显式声明（单机游戏请写 []，否则会继承默认队友数据串味）")
+            _pc_issue(
+                issues,
+                "WARN",
+                "perception.mock.teammates",
+                "未显式声明（单机游戏请写 []，否则会继承默认队友数据串味）",
+            )
     return issues
 
 
@@ -2475,8 +2785,9 @@ def profile_check(game: str = "", check_all: bool = False, strict: bool = False)
     targets = []
     if check_all:
         if os.path.isdir(PROFILE_DIR):
-            targets = sorted(f[:-5] for f in os.listdir(PROFILE_DIR)
-                             if f.endswith(".yaml") and not f.startswith("_"))
+            targets = sorted(
+                f[:-5] for f in os.listdir(PROFILE_DIR) if f.endswith(".yaml") and not f.startswith("_")
+            )
     else:
         targets = [game or active_game()]
     exit_code = 0
@@ -2602,11 +2913,15 @@ def selftest(max_rounds: int = 12) -> int:
     preds = PREDICTOR.all_entities()
     check("mock 感知可出帧", frames == 5)
     check("预判可输出实体", len(preds) > 0)
-    check("预判字段完整", all(k in preds[0] for k in
-                          ("raw_id", "category", "threat_score", "confidence", "prediction_trusted")))
+    check(
+        "预判字段完整",
+        all(
+            k in preds[0] for k in ("raw_id", "category", "threat_score", "confidence", "prediction_trusted")
+        ),
+    )
 
     log("== 自检 2/6 战斗评估 ==")
-    player = (p._mock.get("player") or {})
+    player = p._mock.get("player") or {}
     ev = judge_combat(player, preds, [])
     check("评估含 decision", ev.get("decision") in ("fight", "cautious_fight", "retreat"))
     check("评估含 recommended_set", bool(ev.get("recommended_set")))
@@ -2620,8 +2935,11 @@ def selftest(max_rounds: int = 12) -> int:
     check("知识可影响决策", act in ("defend", "attack", ""))
 
     log("== 自检 4/6 复盘 + BOSS 记忆 ==")
-    state = {"player": {"petal_set": "combat"}, "entities": [{"raw_id": "mantis", "rarity": "Super"}],
-             "teammates": []}
+    state = {
+        "player": {"petal_set": "combat"},
+        "entities": [{"raw_id": "mantis", "rarity": "Super"}],
+        "teammates": [],
+    }
     check("复盘判定命中(BOSS 局)", should_review(state))
     r = review_round(False, "自检复盘", state)
     check("复盘已写入知识库", "已写入知识库" in r)
@@ -2662,7 +2980,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Universal-Game-Framework · 单文件游戏 Agent",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="示例：\n  python agent.py run --dry-run --rounds 20\n"
-               "  python agent.py selftest\n  python agent.py guide",
+        "  python agent.py selftest\n  python agent.py guide",
     )
     ap.add_argument("--game", default="", help="指定游戏名（读 game_profiles/<名字>.yaml）")
     ap.add_argument("--version", action="store_true", help="打印版本号并退出")
@@ -2693,14 +3011,23 @@ def build_parser() -> argparse.ArgumentParser:
     kbsub.add_parser("list")
     kbsub.add_parser("export")
     kbsub.add_parser("maintain")
-    k = kbsub.add_parser("search"); k.add_argument("keyword"); k.add_argument("--all", action="store_true")
-    k = kbsub.add_parser("write"); k.add_argument("filename"); k.add_argument("--content", default="")
-    k = kbsub.add_parser("append"); k.add_argument("filename"); k.add_argument("--content", default="")
-    k = kbsub.add_parser("import"); k.add_argument("backup")
-    k = kbsub.add_parser("boss"); k.add_argument("name", nargs="?", default="")
-    k = kbsub.add_parser("tactic"); k.add_argument("filename")
-    k = kbsub.add_parser("clean"); k.add_argument("--target", default="all",
-                                                  choices=["all", "predict", "frames"])
+    k = kbsub.add_parser("search")
+    k.add_argument("keyword")
+    k.add_argument("--all", action="store_true")
+    k = kbsub.add_parser("write")
+    k.add_argument("filename")
+    k.add_argument("--content", default="")
+    k = kbsub.add_parser("append")
+    k.add_argument("filename")
+    k.add_argument("--content", default="")
+    k = kbsub.add_parser("import")
+    k.add_argument("backup")
+    k = kbsub.add_parser("boss")
+    k.add_argument("name", nargs="?", default="")
+    k = kbsub.add_parser("tactic")
+    k.add_argument("filename")
+    k = kbsub.add_parser("clean")
+    k.add_argument("--target", default="all", choices=["all", "predict", "frames"])
     for p in (kbsub.choices["list"], kbsub.choices["export"], kbsub.choices["maintain"]):
         p.add_argument("--all", action="store_true")
 
