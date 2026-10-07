@@ -178,3 +178,86 @@ def test_webhook_retries_then_fails(monkeypatch):
     ok, why = agent.push_webhook("测试")
     assert ok is False and "网络挂了" in why
     assert fake.post_calls == 2, "首次 + 1 次重试"
+
+
+# ---------------------------------------------------------------------------
+# #8 LLM 决策结构化（schema 校验 + 修复重试 + 来源标签）
+# ---------------------------------------------------------------------------
+def test_validate_action_schema():
+    ok, err = agent._validate_action({"action": "attack"})
+    assert ok == {"action": "attack", "source": "llm"} and err == ""
+    ok, err = agent._validate_action({"action": "move", "x": 10.7, "y": "20"})
+    assert ok == {"action": "move", "x": 10, "y": 20, "source": "llm"}
+    bad, err = agent._validate_action({"action": "fly"})
+    assert bad is None and "action" in err
+    bad, err = agent._validate_action({"action": "move", "x": True, "y": 3})
+    assert bad is None, "bool 冒充数字应被拒绝"
+    bad, err = agent._validate_action(["not", "dict"])
+    assert bad is None
+    ok, _ = agent._validate_action({"action": "idle", "junk": 1})
+    assert "junk" not in ok, "白名单外字段应被丢弃"
+
+
+def _fake_llm_requests(monkeypatch, responses):
+    """按调用次序返回预设 LLM 内容的 requests 替身。"""
+    fake = _FakeRequests()
+    calls = []
+
+    class R:
+        status_code = 200
+
+        def __init__(self, content):
+            self._c = content
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"choices": [{"message": {"content": self._c}}]}
+
+    def post(i, payload):
+        calls.append(payload)
+        return R(responses[min(i - 1, len(responses) - 1)])
+
+    fake.post_script = post
+    monkeypatch.setitem(sys.modules, "requests", fake)
+    monkeypatch.setenv("LLM_API_URL", "http://fake/llm")
+    monkeypatch.setenv("LLM_API_KEY", "k")
+    monkeypatch.setenv("LLM_MODEL", "m")
+    monkeypatch.setattr(agent, "_CFG", dict(_FAST_CFG))
+    return calls
+
+
+def test_llm_invalid_then_repair_retry(monkeypatch):
+    calls = _fake_llm_requests(
+        monkeypatch,
+        [
+            "抱歉我说不出 JSON",
+            '{"action":"attack"}',
+        ],
+    )
+    out = agent.llm_decide({"player": {}}, [], {"decision": "fight"}, "")
+    assert out["action"] == "attack" and out["source"] == "llm"
+    assert len(calls) == 2, "应发生一次修复重试"
+    repair_msgs = calls[1]["messages"]
+    assert any("不合法" in str(m.get("content")) for m in repair_msgs if m["role"] == "user")
+
+
+def test_llm_all_invalid_falls_back_to_rule(monkeypatch):
+    _fake_llm_requests(monkeypatch, ["垃圾输出", "还是垃圾"])
+    out = agent.llm_decide(
+        {"player": {"hp": 100, "max_hp": 100}}, [], {"decision": "fight", "threat_ratio": 0.1}, ""
+    )
+    assert out["source"] in ("rule", "kb")
+    assert out["action"] in agent.VALID_ACTIONS
+
+
+def test_llm_json_fence_parsed(monkeypatch):
+    _fake_llm_requests(monkeypatch, ['```json\n{"action":"move","x":1,"y":2}\n```'])
+    out = agent.llm_decide({"player": {}}, [], {"decision": "fight"}, "")
+    assert out == {"action": "move", "x": 1, "y": 2, "source": "llm"}
+
+
+def test_fallback_tags_source():
+    out = agent.fallback_decide({"player": {"hp": 100, "max_hp": 100}, "afk_popup": True}, {})
+    assert out == {"action": "idle", "source": "rule"}

@@ -82,6 +82,12 @@ logs:
   retention_days: 7            # 日志保留天数，超期删除
   max_size_mb: 20              # 单个日志文件超过该大小 gzip 轮转（ROADMAP #16）
 
+# ROADMAP #8：LLM 决策行为（密钥走 .env 的 LLM_API_URL / LLM_API_KEY / LLM_MODEL）
+llm:
+  system_prompt: ""            # 空=内置提示词；可按游戏覆盖决策人设与输出约束
+  max_tokens: 800              # 单次决策输出上限
+  temperature: 0.3             # 决策要稳，低温
+
 # ROADMAP #5：外部依赖统一降级链——失败重试 N 次（线性退避），仍失败才降级并留日志
 resilience:
   perception:

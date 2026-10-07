@@ -308,6 +308,10 @@ DEFAULT = {
     "paths.backups": "kb_backups",
     "logs.retention_days": 7,
     "logs.max_size_mb": 20,
+    # ROADMAP #8：LLM 决策（prompt 可由游戏档案覆盖；空=内置 SYSTEM_PROMPT）
+    "llm.system_prompt": "",
+    "llm.max_tokens": 800,
+    "llm.temperature": 0.3,
     # ROADMAP #5：外部依赖统一降级链（重试次数 / 线性退避秒 / 超时）
     "resilience.perception.retries": 2,
     "resilience.perception.backoff": 1.0,
@@ -1951,7 +1955,15 @@ def write_boss_memory(observations: list, samples: dict) -> str:
     return kb_append("boss_behavior_log", content)
 
 
-def write_snapshot(rounds: int, deaths: int, player: dict, predictions: list, combat_eval: dict, game: str):
+def write_snapshot(
+    rounds: int,
+    deaths: int,
+    player: dict,
+    predictions: list,
+    combat_eval: dict,
+    game: str,
+    action_source: str = "",
+):
     """每 N 回合写一次快照，供汇报/大盘读取。"""
     threats = [
         {
@@ -1974,6 +1986,7 @@ def write_snapshot(rounds: int, deaths: int, player: dict, predictions: list, co
         "decision": combat_eval.get("decision"),
         "mindset": combat_eval.get("mindset"),
         "set": combat_eval.get("recommended_set"),
+        "action_source": action_source,
         "threats": threats,
     }
     try:
@@ -2021,7 +2034,8 @@ def generate_report() -> str:
     if snap.get("decision"):
         lines += [
             "## 最新战斗",
-            f"- 决策：{snap.get('decision')} / 心态：{snap.get('mindset')} / 推荐套装：{snap.get('set')}",
+            f"- 决策：{snap.get('decision')} / 心态：{snap.get('mindset')} / 推荐套装：{snap.get('set')}"
+            + (f" / 动作来源：{snap.get('action_source')}" if snap.get("action_source") else ""),
         ]
         if snap.get("threats"):
             lines.append("- 近期威胁预判：")
@@ -2438,52 +2452,131 @@ SYSTEM_PROMPT = """你是 Universal-Game-Framework，一个游戏智能体，目
 动作：move(x,y) / attack / defend / synthesize / idle。"""
 
 
+def _llm_extract_json(content: str):
+    """从 LLM 回复里抽出 JSON 对象（兼容 ```json 围栏与前后废话）。"""
+    content = (content or "").strip()
+    if "```" in content:
+        content = content.split("```")[1]
+        if content.startswith("json"):
+            content = content[4:]
+        content = content.strip()
+    return json.loads(content)
+
+
+def _validate_action(obj) -> tuple:
+    """ROADMAP #8：LLM 动作 JSON 的 schema 校验与清洗。
+
+    返回 (合法动作 dict | None, 错误说明)：
+    - action 必须 ∈ VALID_ACTIONS
+    - move 必须携带有限数值 x/y（拒绝 bool 冒充），截断为 int
+    - 白名单外字段一律丢弃；通过则打 source="llm" 标签
+    """
+    if not isinstance(obj, dict):
+        return None, f"不是 JSON 对象（{type(obj).__name__}）"
+    action = str(obj.get("action") or "").strip().lower()
+    if action not in VALID_ACTIONS:
+        return None, f"action 必须是 {'/'.join(VALID_ACTIONS)} 之一，收到 {action!r}"
+    out = {"action": action, "source": "llm"}
+    if action == "move":
+        x, y = obj.get("x"), obj.get("y")
+        if isinstance(x, bool) or isinstance(y, bool):
+            return None, f"move 的 x/y 必须是数字而非布尔（x={x!r} y={y!r}）"
+        try:
+            xf, yf = float(x), float(y)
+        except (TypeError, ValueError):
+            return None, f"move 需要数值 x/y（x={x!r} y={y!r}）"
+        if not (math.isfinite(xf) and math.isfinite(yf)):
+            return None, f"move 的 x/y 必须是有限数（x={x!r} y={y!r}）"
+        out["x"], out["y"] = int(xf), int(yf)
+    return out, ""
+
+
 def llm_decide(state: dict, predictions: list, combat_eval: dict, kb_text: str) -> dict:
+    """LLM 决策（ROADMAP #5/#8）：传输层重试 + schema 校验 + 一次修复重试 + 规则兜底。
+
+    - prompt 可被游戏档案 llm.system_prompt 覆盖
+    - 输出不合法时把校验错误回喂 LLM 修复一次，仍不合法才落 fallback_decide
+    - 返回值恒带 source 标签：llm / kb / rule
+    """
     url = (os.getenv("LLM_API_URL") or "").strip()
     key = (os.getenv("LLM_API_KEY") or "").strip()
     if not url or not key:
         return fallback_decide(state, combat_eval, kb_text)
     try:
         import requests
+    except ImportError:
+        log("[LLM] 未安装 requests，走规则兜底")
+        return fallback_decide(state, combat_eval, kb_text)
 
+    system_prompt = str(cfg_get("llm.system_prompt", "") or "").strip() or SYSTEM_PROMPT
+    user_content = (
+        f"当前游戏状态:\n{json.dumps(state, ensure_ascii=False)}\n\n"
+        f"实体预判(未来1.2秒):\n{json.dumps(predictions, ensure_ascii=False)}\n\n"
+        f"战斗评估:\n{json.dumps(combat_eval, ensure_ascii=False)}\n\n"
+        f"知识库战术:\n{kb_text}\n\n请输出下一步动作的 JSON。"
+    )
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_content},
+    ]
+    attempts = safe_int(cfg_get("resilience.llm.retries", 1), 1) + 1
+    backoff = safe_float(cfg_get("resilience.llm.backoff", 0.5), 0.5)
+    timeout = safe_float(cfg_get("resilience.llm.timeout", 15), 15)
+
+    def _call(msgs):
         payload = {
             "model": os.getenv("LLM_MODEL", ""),
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": f"当前游戏状态:\n{json.dumps(state, ensure_ascii=False)}\n\n"
-                    f"实体预判(未来1.2秒):\n{json.dumps(predictions, ensure_ascii=False)}\n\n"
-                    f"战斗评估:\n{json.dumps(combat_eval, ensure_ascii=False)}\n\n"
-                    f"知识库战术:\n{kb_text}\n\n请输出下一步动作的 JSON。",
-                },
-            ],
-            "max_tokens": 800,
-            "temperature": 0.3,
+            "messages": msgs,
+            "max_tokens": safe_int(cfg_get("llm.max_tokens", 800), 800),
+            "temperature": safe_float(cfg_get("llm.temperature", 0.3), 0.3),
         }
         r = requests.post(
             url,
             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
             json=payload,
-            timeout=15,
+            timeout=timeout,
         )
         r.raise_for_status()
-        content = r.json()["choices"][0]["message"]["content"].strip()
-        if "```" in content:
-            content = content.split("```")[1]
-            if content.startswith("json"):
-                content = content[4:]
-        action = json.loads(content)
-        return action if isinstance(action, dict) else {"action": "idle"}
-    except Exception as e:
-        log(f"[LLM] 决策失败，改用规则兜底: {type(e).__name__}")
+        return r.json()["choices"][0]["message"]["content"].strip()
+
+    ok, content, err = retry_call(lambda: _call(messages), attempts, backoff, "LLM 决策请求")
+    if not ok:
+        log(f"[LLM] 请求失败，改用规则兜底: {err}")
         return fallback_decide(state, combat_eval, kb_text)
+
+    for attempt in (1, 2):
+        try:
+            action, verr = _validate_action(_llm_extract_json(content))
+        except (ValueError, KeyError, IndexError, TypeError) as e:
+            action, verr = None, f"无法解析 JSON: {type(e).__name__}"
+        if action is not None:
+            return action
+        log(f"[LLM] 输出不合法(第 {attempt} 次): {verr}")
+        if attempt == 1:
+            repair = messages + [
+                {"role": "assistant", "content": str(content)},
+                {
+                    "role": "user",
+                    "content": (
+                        f"你上次的输出不合法：{verr}。"
+                        "只输出一个合法的动作 JSON，不要输出其他内容。"
+                        '示例：{"action":"attack"} 或 {"action":"move","x":100,"y":200}'
+                    ),
+                },
+            ]
+            ok2, content2, err2 = retry_call(lambda _m=repair: _call(_m), 1, 0.0, "LLM 修复重试")
+            if not ok2:
+                log(f"[LLM] 修复重试请求失败: {err2}")
+                break
+            content = content2
+    log("[LLM] 修复后仍不合法，改用规则兜底")
+    return fallback_decide(state, combat_eval, kb_text)
 
 
 def fallback_decide(state: dict, combat_eval: dict, kb_text: str = "") -> dict:
     """无 LLM 时的规则兜底 —— 命中知识会真正改变动作（闭环最后一段）。"""
     if state.get("afk_popup"):
-        return {"action": "idle"}
+        return {"action": "idle", "source": "rule"}
     decision = combat_eval.get("decision", "fight")
     player = state.get("player") if isinstance(state.get("player"), dict) else {}
     hp = safe_float(player.get("hp"))
@@ -2501,8 +2594,8 @@ def fallback_decide(state: dict, combat_eval: dict, kb_text: str = "") -> dict:
     if kb_action:
         return {"action": kb_action, "source": "kb"}
     if decision == "retreat":
-        return {"action": "defend"}
-    return {"action": "attack"}
+        return {"action": "defend", "source": "rule"}
+    return {"action": "attack", "source": "rule"}
 
 
 # ===========================================================================
@@ -2695,7 +2788,15 @@ def run_agent(max_rounds: int = 0, interval: float = None) -> dict:
 
             # 10. 快照 / 进度汇报
             if rounds % 2 == 0:
-                write_snapshot(rounds, deaths, player, predictions, ev, game)
+                write_snapshot(
+                    rounds,
+                    deaths,
+                    player,
+                    predictions,
+                    ev,
+                    game,
+                    action_source=str(action.get("source") or ""),
+                )
             if report_every and rounds % report_every == 0:
                 notify_progress(rounds, deaths)
 
