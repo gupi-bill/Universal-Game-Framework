@@ -2,6 +2,7 @@
 
 import os
 import sys
+from collections import deque
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import agent  # noqa: E402
@@ -221,3 +222,78 @@ def test_review_custom_template_and_structured_fields(tmp_path, monkeypatch):
         c = f.read()
     assert c.startswith("自定义复盘 死亡 套装=tank")
     assert "## 结构化字段" in c and "killer_entities:" in c
+
+
+# ---------------------------------------------------------------------------
+# #9 实体跟踪 ID 稳定性
+# ---------------------------------------------------------------------------
+def _mk_predictor_with(trackers):
+    p = agent.Predictor()
+    uids = []
+    for i, (rid, hist) in enumerate(trackers, 1):
+        uid = f"{rid}_{i}"
+        tk = agent._Tracker(rid, "Common", "monster")
+        tk.history = deque(hist, maxlen=max(10, len(hist)))
+        tk.last_seen = hist[-1]["t"]
+        p._t[uid] = tk
+        uids.append(uid)
+    return p, uids
+
+
+def test_match_prefers_predicted_position_on_cross(monkeypatch):
+    """交叉走位：按最近距离会张冠李戴，按预测位置 + 方向一致性才对。"""
+    monkeypatch.setattr(agent, "_CFG", {"predictor": {"match_max_dist": 400}})
+    now = 100.0
+    t1 = [
+        {"t": now - 0.2, "x": 35.0, "y": 0.0},
+        {"t": now - 0.1, "x": 40.0, "y": 0.0},
+        {"t": now, "x": 45.0, "y": 0.0},
+    ]  # 右行 v=+50
+    t2 = [
+        {"t": now - 0.2, "x": 65.0, "y": 0.0},
+        {"t": now - 0.1, "x": 60.0, "y": 0.0},
+        {"t": now, "x": 55.0, "y": 0.0},
+    ]  # 左行 v=-50
+    p, uids = _mk_predictor_with([("bee", t1), ("bee", t2)])
+    dets = [
+        {"raw_id": "bee", "rarity": "Common", "role": "monster", "x": 40.0, "y": 0.0},
+        {"raw_id": "bee", "rarity": "Common", "role": "monster", "x": 60.0, "y": 0.0},
+    ]
+    assign = p._match(dets, now + 0.1)
+    assert assign[0] == uids[1], "左行检测点应归左行跟踪器"
+    assert assign[1] == uids[0], "右行检测点应归右行跟踪器"
+
+
+def test_match_max_dist_opens_new_track(monkeypatch):
+    """瞬移/重生级别的跳变不误挂旧轨，宁开新轨。"""
+    monkeypatch.setattr(agent, "_CFG", {"predictor": {"match_max_dist": 50}})
+    now = 100.0
+    t1 = [{"t": now, "x": 0.0, "y": 0.0}]
+    p, _uids = _mk_predictor_with([("bee", t1)])
+    dets = [{"raw_id": "bee", "rarity": "Common", "role": "monster", "x": 900.0, "y": 900.0}]
+    assert p._match(dets, now) == {}
+
+
+def test_role_flip_penalized(monkeypatch):
+    """敌↔友角色跳变是强误配信号：优先分给角色一致的跟踪器。"""
+    monkeypatch.setattr(agent, "_CFG", {"predictor": {"match_max_dist": 400}})
+    now = 100.0
+    t_enemy = [{"t": now, "x": 50.0, "y": 0.0}]
+    t_ally = [{"t": now, "x": 52.0, "y": 0.0}]
+    p = agent.Predictor()
+    p._t["e1"] = agent._Tracker("p1", "Common", "player_enemy")
+    p._t["e1"].history = deque(t_enemy, maxlen=10)
+    p._t["a1"] = agent._Tracker("p1", "Common", "player_ally")
+    p._t["a1"].history = deque(t_ally, maxlen=10)
+    dets = [{"raw_id": "p1", "rarity": "Common", "role": "player_ally", "x": 51.0, "y": 0.0}]
+    assign = p._match(dets, now + 0.05)
+    assert assign[0] == "a1", "即使敌人跟踪器距离更近，角色一致优先"
+
+
+def test_predictor_update_still_tracks_normal_motion():
+    """常规单实体跟踪不因匹配升级而回归。"""
+    p = agent.Predictor()
+    for i in range(5):
+        p.update([{"raw_id": "hornet", "rarity": "Common", "x": 100 + i * 40, "y": 200}])
+    preds = p.all_entities()
+    assert len(preds) == 1 and preds[0]["raw_id"] == "hornet"

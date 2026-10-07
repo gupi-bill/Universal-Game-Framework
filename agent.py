@@ -262,6 +262,7 @@ DEFAULT = {
     "predictor.speed_ref": 2000.0,
     "predictor.speed_penalty_floor": 0.3,
     "predictor.jitter_floor": 0.35,
+    "predictor.match_max_dist": 400,  # ROADMAP #9：匹配距离上限，超过宁开新轨不误挂
     "predictor.rarity_highest_boss": ["Unique", "Eternal"],
     "predictor.rarity_boss": ["Super"],
     "predictor.rarity_elite": ["Ultra", "Mythic", "Legendary", "Epic"],
@@ -1062,37 +1063,101 @@ class Predictor:
         self._t = {}
         self._uid = 0
 
+    def _predicted_pos(self, tk, now: float):
+        """跟踪器在 now 时刻的预测位置（线性外推），返回 (px, py, vx, vy)。"""
+        if not tk.history:
+            return None
+        last = tk.history[-1]
+        vx = vy = 0.0
+        if len(tk.history) >= 2:
+            first = tk.history[0]
+            dt_h = last["t"] - first["t"]
+            if dt_h > 0:
+                vx = (last["x"] - first["x"]) / dt_h
+                vy = (last["y"] - first["y"]) / dt_h
+        dt = min(max(now - last["t"], 0.0), 0.5)
+        return last["x"] + vx * dt, last["y"] + vy * dt, vx, vy
+
+    def _match(self, dets: list, now: float) -> dict:
+        """ROADMAP #9：多因子匹配，返回 {det_index: tracker_uid}。
+
+        打分 = 预测位置距离
+             + 运动方向不一致惩罚（检测位移方向与跟踪器速度反向时按位移量加罚）
+             + 角色跳变惩罚（敌↔友切换视为强误配信号）
+        贪心按分低者优先独占分配；距离超过 match_max_dist 宁开新轨不误挂。
+        同 raw_id 多只实体交叉走位时不再张冠李戴。
+        """
+        max_dist = safe_float(cfg_get("predictor.match_max_dist", 400), 400)
+        pairs = []
+        for di, d in enumerate(dets):
+            for uid, tk in self._t.items():
+                if tk.raw_id != d["raw_id"]:
+                    continue
+                pp = self._predicted_pos(tk, now)
+                if pp is None:
+                    continue
+                px, py, vx, vy = pp
+                dist = math.hypot(d["x"] - px, d["y"] - py)
+                if dist > max_dist:
+                    continue
+                score = dist
+                if tk.history:
+                    last = tk.history[-1]
+                    mx, my = d["x"] - last["x"], d["y"] - last["y"]
+                    mnorm = math.hypot(mx, my)
+                    vnorm = math.hypot(vx, vy)
+                    if mnorm > 1 and vnorm > 1:
+                        cos = (mx * vx + my * vy) / (mnorm * vnorm)
+                        if cos < 0:
+                            score += (1 - cos) * 0.5 * mnorm
+                if (
+                    tk.role in ("player_enemy", "player_ally")
+                    and d["role"] in ("player_enemy", "player_ally")
+                    and tk.role != d["role"]
+                ):
+                    score += 100000
+                pairs.append((score, uid, di))
+        pairs.sort(key=lambda p: p[0])
+        used_t, used_d, assign = set(), set(), {}
+        for _score, uid, di in pairs:
+            if uid in used_t or di in used_d:
+                continue
+            used_t.add(uid)
+            used_d.add(di)
+            assign[di] = uid
+        return assign
+
     def update(self, entities: list):
-        seen = set()
+        now = time.time()
+        dets = []
         for ent in entities or []:
             if not isinstance(ent, dict):
                 continue
             raw_id = ent.get("raw_id", "unknown")
-            rarity = ent.get("rarity", "Common")
             x, y = ent.get("x"), ent.get("y")
             if not _valid_coord(x, y):
                 continue
-            role = detect_role(raw_id, ent.get("role"))
-            cands = [(u, t) for u, t in self._t.items() if t.raw_id == raw_id and u not in seen]
-            if cands:
-                uid = min(
-                    cands,
-                    key=lambda it: (
-                        ((it[1].history[-1]["x"] - float(x)) ** 2 + (it[1].history[-1]["y"] - float(y)) ** 2)
-                        if it[1].history
-                        else 0.0
-                    ),
-                )[0]
-            else:
+            dets.append(
+                {
+                    "raw_id": raw_id,
+                    "rarity": ent.get("rarity", "Common"),
+                    "role": detect_role(raw_id, ent.get("role")),
+                    "x": float(x),
+                    "y": float(y),
+                }
+            )
+        assign = self._match(dets, now)
+        for di, d in enumerate(dets):
+            uid = assign.get(di)
+            if uid is None:
                 self._uid += 1
-                uid = f"{raw_id}_{self._uid}"
-                self._t[uid] = _Tracker(raw_id, rarity, role)
+                uid = f"{d['raw_id']}_{self._uid}"
+                self._t[uid] = _Tracker(d["raw_id"], d["rarity"], d["role"])
             tk = self._t[uid]
-            tk.role = role
-            tk.rarity = rarity
-            tk.category = role if role != "monster" else classify_by_rarity(rarity)
-            tk.update(x, y)
-            seen.add(uid)
+            tk.role = d["role"]
+            tk.rarity = d["rarity"]
+            tk.category = d["role"] if d["role"] != "monster" else classify_by_rarity(d["rarity"])
+            tk.update(d["x"], d["y"])
         for uid in [u for u, t in self._t.items() if t.expired()]:
             del self._t[uid]
 

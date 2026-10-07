@@ -34,6 +34,7 @@ predictor:
   speed_ref: 2000              # 速度惩罚参考值(px/s)，到该速度惩罚触底
   speed_penalty_floor: 0.3     # 速度惩罚下限
   jitter_floor: 0.35           # 抖动惩罚下限（轨迹越绕，置信越低）
+  match_max_dist: 400          # 实体匹配距离上限，超过宁开新轨不误挂（ROADMAP #9）
   # 稀有度体系（Florr.io 原生，按游戏可换）
   rarity_highest_boss: ["Unique", "Eternal"]
   rarity_boss: ["Super"]
