@@ -18,6 +18,8 @@ perception:
   skip_on_timeout: 0.8         # 超时时休眠秒数，给 CPU 喘息
   screen_w: 1920               # 越界过滤用屏幕尺寸（可被实际分辨率覆盖）
   screen_h: 1080
+  source_w: 0                  # 感知后端坐标系宽（0=与逻辑屏一致不缩放；ROADMAP #19）
+  source_h: 0                  # 感知后端坐标系高
   # v2.0 S15：离线场景已迁回各游戏档案（game_profiles/<game>.yaml 的 perception.mock）。
   # 此处不再维护 mock 数据；未声明时回退 config.py 的 DEFAULT（florr 场景）。
 predictor:
