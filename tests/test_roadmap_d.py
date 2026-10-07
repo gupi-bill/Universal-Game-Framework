@@ -271,3 +271,37 @@ def test_build_pyz_end_to_end():
     assert r.returncode == 0, r.stdout[-800:] + r.stderr[-300:]
     assert "19/19" in r.stdout
     assert os.path.exists(os.path.join(root, "dist", "ugf.pyz"))
+
+
+# ---------------------------------------------------------------------------
+# #2 模块化分片 ↔ 单文件
+# ---------------------------------------------------------------------------
+def test_parts_build_matches_agent():
+    """CI 同款校验：src/ugf 分片拼接必须与 agent.py 逐字节一致。"""
+    import subprocess
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    r = subprocess.run(
+        [sys.executable, os.path.join(root, "build.py"), "check-agent"],
+        capture_output=True, text=True, timeout=60, cwd=root,
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "逐字节一致" in r.stdout
+
+
+def test_split_roundtrip_identity(tmp_path):
+    """split → agent 往返：对当前 agent.py 拆分再合并，产物不变。"""
+    import subprocess
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, "agent.py"), encoding="utf-8") as f:
+        before = f.read()
+    r1 = subprocess.run([sys.executable, os.path.join(root, "build.py"), "split"],
+                        capture_output=True, text=True, timeout=60, cwd=root)
+    assert r1.returncode == 0, r1.stdout
+    r2 = subprocess.run([sys.executable, os.path.join(root, "build.py"), "agent"],
+                        capture_output=True, text=True, timeout=60, cwd=root)
+    assert r2.returncode == 0, r2.stdout
+    with open(os.path.join(root, "agent.py"), encoding="utf-8") as f:
+        after = f.read()
+    assert before == after, "往返转换必须零改动"

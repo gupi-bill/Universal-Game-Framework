@@ -44,6 +44,9 @@ py-modules = ["agent"]
 [tool.ruff]
 line-length = 110
 target-version = "py310"
+# src/ugf/ 是 agent.py 的构建分片（ROADMAP #2）：内容整体参与 lint（以 agent.py 为准），
+# 分片单独解析会产生跨文件未定义名误报，故排除
+extend-exclude = ["src/ugf"]
 
 [tool.ruff.lint]
 # 项目规则集：pyflakes + pycodestyle + bugbear + simplify + comprehension + pyupgrade

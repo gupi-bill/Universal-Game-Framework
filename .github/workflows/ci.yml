@@ -52,6 +52,9 @@ jobs:
       - name: 游戏档案校验（ROADMAP #10）
         run: python agent.py profile-check --all
 
+      - name: 分片构建一致性（ROADMAP #2）
+        run: python build.py check-agent
+
   lint:
     name: ruff (check + format)
     runs-on: ubuntu-latest

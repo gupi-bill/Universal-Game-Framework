@@ -170,7 +170,8 @@ Universal-Game-Framework/
 ├── docs/                 # 架构 / 新游戏接入指南 / FAQ
 ├── tests/                # 116 项测试（含故障注入）
 ├── tools/secret_scan.py  # 密钥防泄漏扫描（pre-commit + CI）
-├── build.py              # zipapp 构建（dist/ugf.pyz）
+├── src/ugf/              # 模块化分片源（build.py split/agent 与单文件互转）
+├── build.py              # 构建工具：zipapp 分发 + 分片↔单文件互转与一致性校验
 ├── ROADMAP.md            # 优化路线图（26 项）
 ├── CHANGELOG.md          # 版本变更记录
 ├── requirements.txt      # 依赖（核心只有 pyyaml + requests）
