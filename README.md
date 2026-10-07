@@ -12,6 +12,8 @@
 [![mypy](https://img.shields.io/badge/mypy-0%20errors-brightgreen)](pyproject.toml)
 [![License](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 
+**中文** | **[English](./README_EN.md)**
+
 > ⚠️ **声明**：仅用于本地 AI 智能体技术研究。在 florr.io 官方服务器运行 bot 违反游戏服务条款，可能导致账号封禁。请在本地 / 自建 / 已授权环境使用。
 
 </div>
