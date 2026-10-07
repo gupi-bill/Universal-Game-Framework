@@ -71,10 +71,6 @@ agent:
   learning_stats_interval: 24  # 学习命中统计落盘轮数
   report_every: 0              # v1.7 局中定时汇报间隔(轮数，0=关闭；>0 则每 N 轮上报一次进度)
 
-mcp:
-  streamable_http: false       # 是否启用 streamable HTTP 传输
-  streamable_port: 5050
-
 paths:
   knowledge_md: knowledge_md   # 知识库目录
   frames: video_frames         # 视频抽帧临时目录
