@@ -30,7 +30,7 @@
 4. **动**：按经验做出移动 / 攻击 / 切套装的动作。
 5. **记**：打完一局写复盘，把有用的经验继续写进本子。
 
-这个"机器人"就是 [agent.py](file:///workspace/Universal-Game-Framework/agent.py) ——
+这个"机器人"就是 [agent.py](./agent.py) ——
 **一个文件、一条命令就能开跑**，不需要装 MCP 服务、不需要别的 Agent 托管。
 
 ---
@@ -101,14 +101,14 @@ python agent.py run
 改参数不用改源码，全部集中在这三处（**优先级从低到高**）：
 
 1. `agent.py` 里的内置 `DEFAULT`（最后兜底）
-2. [config.yaml](file:///workspace/Universal-Game-Framework/config.yaml)（全局配置）
-3. `game_profiles/<游戏名>.yaml`（游戏档案，见 [game_profiles/](file:///workspace/Universal-Game-Framework/game_profiles)）
+2. [config.yaml](./config.yaml)（全局配置）
+3. `game_profiles/<游戏名>.yaml`（游戏档案，见 [game_profiles/](./game_profiles)）
 
 改完保存即**热加载**生效，不用重启。
 
 ### 常用环境变量
 
-复制 [.env.example](file:///workspace/Universal-Game-Framework/.env.example) 为 `.env` 再填：
+复制 [.env.example](./.env.example) 为 `.env` 再填：
 
 | 变量 | 作用 |
 | --- | --- |
@@ -144,7 +144,7 @@ python -m pytest tests/ -q      # 单元测试
 python agent.py selftest        # 端到端离线自检
 ```
 
-CI（[.github/workflows/ci.yml](file:///workspace/Universal-Game-Framework/.github/workflows/ci.yml)）会在 Python 3.11 / 3.13 上跑这两项。
+CI（[.github/workflows/ci.yml](./.github/workflows/ci.yml)）会在 Python 3.11 / 3.13 上跑这两项。
 
 ---
 
@@ -187,6 +187,14 @@ Universal-Game-Framework/
 
 ---
 
+## 贡献与安全
+
+- 参与贡献：[CONTRIBUTING.md](CONTRIBUTING.md)（双源工作流 / 质量门槛 / 提交规范）
+- 报告漏洞：[SECURITY.md](SECURITY.md)（请走 GitHub 私密通道，勿开公开 Issue）
+- [Issue 模板](.github/ISSUE_TEMPLATE)：Bug 报告 / 功能建议
+
+---
+
 ## License
 
-MIT，见 [LICENSE](file:///workspace/Universal-Game-Framework/LICENSE)。
+MIT，见 [LICENSE](./LICENSE)。
