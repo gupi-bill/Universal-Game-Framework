@@ -88,3 +88,93 @@ def test_logs_cli_exit_zero(tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert '"kind": "learn"' in out
     assert agent.main(["logs", "--tail", "5", "--grep", "nothing"]) == 0
+
+
+# ---------------------------------------------------------------------------
+# #5 统一降级链（故障注入）
+# ---------------------------------------------------------------------------
+class _FakeRequests:
+    """可编程 requests 替身：get/post 按脚本抛错或返回。"""
+
+    def __init__(self):
+        self.get_calls = 0
+        self.post_calls = 0
+        self.get_script = None
+        self.post_script = None
+
+    def get(self, url, timeout=None):
+        self.get_calls += 1
+        return self.get_script(self.get_calls)
+
+    def post(self, url, headers=None, json=None, timeout=None):
+        self.post_calls += 1
+        return self.post_script(self.post_calls, json)
+
+
+_FAST_CFG = {
+    "resilience": {
+        "perception": {"retries": 2, "backoff": 0},
+        "webhook": {"retries": 1, "backoff": 0, "timeout": 1},
+        "llm": {"retries": 1, "backoff": 0, "timeout": 1},
+    },
+    "perception": {"timeout": 1},
+}
+
+
+def _use_http_perception(monkeypatch, fake):
+    monkeypatch.setitem(sys.modules, "requests", fake)
+    monkeypatch.setenv("UGF_PERCEPTION_BACKEND", "http")
+    monkeypatch.setenv("UGF_PERCEPTION_URL", "http://127.0.0.1:1/perceive")
+    monkeypatch.setattr(agent, "_CFG", dict(_FAST_CFG))
+
+
+def test_perception_http_retries_then_errors(monkeypatch):
+    fake = _FakeRequests()
+
+    def boom(i):
+        raise ConnectionError("unreachable")
+
+    fake.get_script = boom
+    _use_http_perception(monkeypatch, fake)
+    frame = agent.Perception()._http_frame()
+    assert "error" in frame and "unreachable" in frame["error"]
+    assert fake.get_calls == 3, "首次 + 2 次重试"
+
+
+def test_perception_http_retry_recovers(monkeypatch):
+    fake = _FakeRequests()
+
+    class R:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"player": {"alive": True}, "entities": [], "_raw": 1}
+
+    def script(i):
+        if i < 2:
+            raise ConnectionError("瞬断")
+        return R()
+
+    fake.get_script = script
+    _use_http_perception(monkeypatch, fake)
+    frame = agent.Perception()._http_frame()
+    assert "error" not in frame and frame["player"]["alive"] is True
+    assert "_raw" not in frame
+
+
+def test_webhook_retries_then_fails(monkeypatch):
+    fake = _FakeRequests()
+
+    def boom(i, payload):
+        raise ConnectionError("网络挂了")
+
+    fake.post_script = boom
+    monkeypatch.setitem(sys.modules, "requests", fake)
+    monkeypatch.setenv("UGF_WEBHOOK_URL", "http://127.0.0.1:1/hook")
+    monkeypatch.setattr(agent, "_CFG", dict(_FAST_CFG))
+    ok, why = agent.push_webhook("测试")
+    assert ok is False and "网络挂了" in why
+    assert fake.post_calls == 2, "首次 + 1 次重试"

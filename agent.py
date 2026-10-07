@@ -91,6 +91,30 @@ def env_flag(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
+def retry_call(fn, attempts: int, backoff: float, label: str) -> tuple:
+    """外部依赖统一调用（ROADMAP #5）：返回 (ok, result, err)。
+
+    - attempts: 总尝试次数（含首次）；backoff: 线性退避基数（第 i 次失败后睡 backoff*i 秒）
+    - 每次失败细节进日志；最终失败返回 (False, None, 最后一次错误)
+    """
+    attempts = max(1, safe_int(attempts, 1))
+    backoff = max(0.0, safe_float(backoff, 0.0))
+    last_err = ""
+    for i in range(attempts):
+        try:
+            return True, fn(), ""
+        except Exception as e:  # 外部边界统一收敛：网络/解析/服务异常都算失败
+            last_err = f"{type(e).__name__}: {e}"
+            if i + 1 < attempts:
+                log(
+                    f"[降级] {label} 第 {i + 1}/{attempts} 次失败: {last_err}，{backoff * (i + 1):.1f}s 后重试"
+                )
+                if backoff > 0:
+                    time.sleep(backoff * (i + 1))
+    log(f"[降级] {label} {attempts} 次尝试均失败: {last_err}")
+    return False, None, last_err
+
+
 def safe_float(v, default: float = 0.0) -> float:
     """脏数据（None / 字符串 / NaN / Inf）一律收敛成有限 float。"""
     try:
@@ -284,6 +308,15 @@ DEFAULT = {
     "paths.backups": "kb_backups",
     "logs.retention_days": 7,
     "logs.max_size_mb": 20,
+    # ROADMAP #5：外部依赖统一降级链（重试次数 / 线性退避秒 / 超时）
+    "resilience.perception.retries": 2,
+    "resilience.perception.backoff": 1.0,
+    "resilience.webhook.retries": 2,
+    "resilience.webhook.backoff": 1.0,
+    "resilience.webhook.timeout": 5,
+    "resilience.llm.retries": 1,
+    "resilience.llm.backoff": 0.5,
+    "resilience.llm.timeout": 15,
 }
 
 CONFIG_PATH = os.path.join(BASE_DIR, "config.yaml")
@@ -1497,14 +1530,22 @@ class Perception:
         url = (os.getenv("UGF_PERCEPTION_URL") or "").strip() or cfg_get("perception.http_url", "")
         if not url:
             url = f"http://127.0.0.1:{safe_int(cfg_get('server.perception_port', 5001), 5001)}/perceive"
-        try:
+        attempts = safe_int(cfg_get("resilience.perception.retries", 2), 2) + 1
+        backoff = safe_float(cfg_get("resilience.perception.backoff", 1.0), 1.0)
+
+        def _fetch():
             r = requests.get(url, timeout=safe_float(cfg_get("perception.timeout", 24), 24))
             r.raise_for_status()
             data = r.json()
             data.pop("_raw", None)
-            return data if isinstance(data, dict) else {"error": "感知服务返回非 JSON 对象"}
-        except Exception as e:
-            return {"error": f"感知服务不可用: {type(e).__name__}: {e}"}
+            if not isinstance(data, dict):
+                raise ValueError("感知服务返回非 JSON 对象")
+            return data
+
+        ok, data, err = retry_call(_fetch, attempts, backoff, "感知服务")
+        if ok:
+            return data
+        return {"error": f"感知服务不可用: {err}"}
 
     def frame(self) -> dict:
         return self._http_frame() if self.backend() == "http" else self._mock_frame()
@@ -2016,15 +2057,19 @@ def push_webhook(text: str) -> tuple:
         import requests
     except ImportError:
         return False, "requests 未安装（离线环境）"
-    try:
-        r = requests.post(url, json={"text": text}, timeout=5)
-    except Exception as e:
-        return False, f"请求异常: {type(e).__name__}"
-    return (
-        (True, f"HTTP {r.status_code}")
-        if 200 <= getattr(r, "status_code", 0) < 300
-        else (False, f"HTTP {getattr(r, 'status_code', '?')}")
-    )
+    attempts = safe_int(cfg_get("resilience.webhook.retries", 2), 2) + 1
+    backoff = safe_float(cfg_get("resilience.webhook.backoff", 1.0), 1.0)
+    timeout = safe_float(cfg_get("resilience.webhook.timeout", 5), 5)
+
+    def _post():
+        r = requests.post(url, json={"text": text}, timeout=timeout)
+        code = getattr(r, "status_code", 0)
+        if not 200 <= code < 300:
+            raise RuntimeError(f"HTTP {code or '?'}")
+        return code
+
+    ok, code, err = retry_call(_post, attempts, backoff, "Webhook 推送")
+    return (True, f"HTTP {code}") if ok else (False, err)
 
 
 def notify(quiet: bool = False) -> list:

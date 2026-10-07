@@ -80,4 +80,18 @@ paths:
 
 logs:
   retention_days: 7            # 日志保留天数，超期删除
-  max_size_mb: 20              # 单个日志文件超过该大小先压缩
+  max_size_mb: 20              # 单个日志文件超过该大小 gzip 轮转（ROADMAP #16）
+
+# ROADMAP #5：外部依赖统一降级链——失败重试 N 次（线性退避），仍失败才降级并留日志
+resilience:
+  perception:
+    retries: 2                 # http 感知失败重试次数（不含首次）
+    backoff: 1.0               # 退避基数秒：第 i 次失败后睡 backoff*i
+  webhook:
+    retries: 2
+    backoff: 1.0
+    timeout: 5                 # 单次推送超时秒
+  llm:
+    retries: 1                 # LLM 传输层错误重试（输出不合法的修复重试另计）
+    backoff: 0.5
+    timeout: 15
