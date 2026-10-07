@@ -105,6 +105,15 @@ DEFAULT = {
     "learn.hash_dedup": True,  # 抽帧后感知哈希跳过近重复帧，省 VLM 调用
     "learn.hash_threshold": 5,  # 汉明距离 ≤ 该值视为近重复（64bit 哈希）
     "learn.min_votes": 2,  # 同一战术需 ≥N 帧支持才入库（1=关闭投票）
+    # v3.0：联网查攻略 + 现场 LoRA 预热
+    "preheat.enable": True,  # 启动任务前是否联网检索教程+现场训练
+    "preheat.max_seconds": 180,  # 预热最长耗时（秒），超时直接用现有知识开跑
+    "preheat.max_samples": 200,  # 最多采集多少条攻略样本喂给 LoRA
+    "preheat.sources": ["wiki", "bilibili", "miyoushe", "reddit"],  # 资料源
+    "preheat.auto_lora": True,  # 是否自动生成临时 LoRA 适配器
+    "preheat.lr": 1e-4,  # LoRA 学习率
+    "preheat.epochs": 3,  # 现场训练轮数（小样本，不能多）
+    "preheat.cache_dir": "",  # LoRA 缓存目录（空=UGF_HOME/preheat_cache）
     # ROADMAP #5：外部依赖统一降级链（重试次数 / 线性退避秒 / 超时）
     "resilience.perception.retries": 2,
     "resilience.perception.backoff": 1.0,

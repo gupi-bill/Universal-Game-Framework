@@ -277,6 +277,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--save", action="store_true", help="统计报告落盘 run_logs/session_report.md")
     sub.add_parser("afk", help="AFK 弹窗处理指引")
 
+    sp = sub.add_parser("preheat", help="联网查攻略+现场LoRA预热")
+    sp.add_argument("--game", default="florr", help="游戏名")
+    sp.add_argument("--target", required=True, help="目标，如 boss名/关卡名")
+
     sp = sub.add_parser("action", help="执行一个动作")
     sp.add_argument("type", choices=list(VALID_ACTIONS))
     sp.add_argument("--x", type=int, default=None)
@@ -406,6 +410,8 @@ def main(argv=None) -> int:
         print(switch_set(args.name))
     elif cmd == "afk":
         print(handle_afk())
+    elif cmd == "preheat":
+        _print(preheat(args.game, args.target))
     elif cmd == "kb":
         if not args.kb_cmd:
             print(GUIDE)

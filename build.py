@@ -48,6 +48,7 @@ SLUGS = {
     "14a": "panel",
     "15": "cli",
     "15a": "profile_check",
+    "16": "preheat",
 }
 MAIN_SRC = '''"""ugf.pyz 入口壳：转发到 agent.main()。"""
 import sys

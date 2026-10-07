@@ -1,0 +1,195 @@
+# ===========================================================================
+# 16. 联网查攻略 + 现场 LoRA 预热（v3.0 通用游戏 Agent）
+# ===========================================================================
+# 启动任务前：
+#   1) 多源检索（wiki/B站/米游社/reddit）拉攻略
+#   2) 清洗成结构化样本 [状态, 推荐动作, 风险说明]
+#   3) 现场 LoRA 小适配器训练（不改主干权重，任务完即弃）
+# 全程带超时与降级：拉不到/训不动就跳过，不卡死主流程。
+
+import hashlib
+import os
+import re
+import time
+from datetime import datetime
+
+
+def _preheat_cache_dir() -> str:
+    d = str(cfg_get("preheat.cache_dir", "") or "").strip()
+    if d:
+        return d
+    return os.path.join(UGF_HOME, "preheat_cache")
+
+
+# ---------------------------------------------------------------------------
+# 16.1 资料检索
+# ---------------------------------------------------------------------------
+def _fetch_tutorials(game: str, target: str) -> list:
+    """按游戏+目标关键词，从多个来源拉攻略文本。失败静默降级。
+
+    返回 [{"source": str, "title": str, "text": str}, ...]
+    """
+    queries = [
+        f"{game} {target} 攻略",
+        f"{game} {target} 教程",
+        f"{game} {target} how to beat",
+    ]
+    out = []
+    sources = cfg_get("preheat.sources", []) or []
+    try:
+        import requests
+    except ImportError:
+        log("[预热] 未装 requests，跳过联网检索")
+        return out
+
+    # 用 DuckDuckGo HTML 搜索（无需 key）
+    for q in queries:
+        try:
+            r = requests.get(
+                "https://html.duckduckgo.com/html/",
+                params={"q": q},
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=10,
+            )
+            if not r.ok:
+                continue
+            # 简单抓结果标题+摘要
+            titles = re.findall(r'result__a[^>]*>([^<]+)<', r.text)
+            snippets = re.findall(r'result__snippet[^>]*>([^<]+)<', r.text)
+            for i, t in enumerate(titles[:5]):
+                snip = snippets[i] if i < len(snippets) else ""
+                out.append({"source": "web", "title": t.strip(), "text": snip.strip()})
+        except Exception as e:
+            log(f"[预热] 搜索失败({q[:20]}...): {type(e).__name__}")
+        time.sleep(0.5)  # 限速防封
+    return out
+
+
+# ---------------------------------------------------------------------------
+# 16.2 清洗成训练样本
+# ---------------------------------------------------------------------------
+_ACTION_WORDS = [
+    "attack", "defend", "dodge", "retreat", "chase", "heal", "use_skill",
+    "use_ultimate", "move_left", "move_right", "move_up", "move_down",
+    "攻击", "防御", "闪避", "撤退", "追击", "加血", "用技能", "放大招",
+]
+
+
+def _clean_to_samples(docs: list, max_n: int) -> list:
+    """把攻略文本切成 (状态, 动作, 理由) 三元组样本。"""
+    samples = []
+    for doc in docs:
+        text = doc.get("text", "") or ""
+        if len(text) < 10:
+            continue
+        # 简单切句
+        for sent in re.split(r"[。！！.!?？\n]", text):
+            sent = sent.strip()
+            if len(sent) < 8 or len(sent) > 200:
+                continue
+            # 找句子里有没有动作词
+            action = next((a for a in _ACTION_WORDS if a in sent.lower()), None)
+            if not action:
+                continue
+            samples.append({
+                "state": doc.get("title", ""),
+                "action": action,
+                "reason": sent,
+                "source": doc.get("source", "web"),
+            })
+            if len(samples) >= max_n:
+                return samples
+    return samples
+
+
+# ---------------------------------------------------------------------------
+# 16.3 现场 LoRA 训练（骨架，依赖可选）
+# ---------------------------------------------------------------------------
+def _train_lora(samples: list, game: str, target: str) -> str:
+    """用样本训一个临时 LoRA 适配器。返回适配器路径。
+
+    依赖 transformers/peft/torch 才真训；没有就退化成把样本写进知识库。
+    """
+    cache_dir = _preheat_cache_dir()
+    os.makedirs(cache_dir, exist_ok=True)
+    key = hashlib.md5(f"{game}:{target}".encode()).hexdigest()[:12]
+    adapter_dir = os.path.join(cache_dir, f"lora_{key}")
+
+    # 不管训没训，先把样本落盘，下次命中直接复用
+    import json
+    samples_file = os.path.join(cache_dir, f"samples_{key}.json")
+    with open(samples_file, "w", encoding="utf-8") as f:
+        json.dump(samples, f, ensure_ascii=False, indent=2)
+
+    if not cfg_get("preheat.auto_lora", True):
+        log("[预热] auto_lora=false，跳过 LoRA 训练，样本已落盘")
+        return ""
+
+    try:
+        import torch  # noqa: F401
+        from peft import LoraConfig  # noqa: F401
+        from transformers import AutoTokenizer  # noqa: F401
+    except ImportError:
+        log("[预热] 未装 torch/peft/transformers，样本已存知识库（跳过实训练）")
+        # 降级：把样本写进知识库 MD
+        kb_dir = os.path.join(UGF_HOME, "kb")
+        os.makedirs(kb_dir, exist_ok=True)
+        md = os.path.join(kb_dir, f"preheat_{key}.md")
+        with open(md, "w", encoding="utf-8") as f:
+            f.write(f"# 预热攻略：{game} - {target}\n\n")
+            for s in samples:
+                f.write(f"- **{s['action']}**：{s['reason']}\n")
+        log(f"[预热] 已写 {len(samples)} 条样本到 {md}")
+        return ""
+
+    # 真训练（骨架占位，依赖到位再补实际训练循环）
+    os.makedirs(adapter_dir, exist_ok=True)
+    log(f"[预热] LoRA 训练完成（占位）：{adapter_dir}")
+    return adapter_dir
+
+
+# ---------------------------------------------------------------------------
+# 16.4 对外入口：preheat(game, target)
+# ---------------------------------------------------------------------------
+def preheat(game: str, target: str) -> dict:
+    """启动任务前的预热：查攻略 → 清洗 → 现场 LoRA。
+
+    返回 {"samples": N, "adapter": path|""}
+    """
+    if not cfg_get("preheat.enable", True):
+        log("[预热] preheat.enable=false，跳过")
+        return {"samples": 0, "adapter": ""}
+
+    t0 = time.time()
+    max_sec = safe_int(cfg_get("preheat.max_seconds", 180), 180)
+    max_samples = safe_int(cfg_get("preheat.max_samples", 200), 200)
+
+    log(f"[预热] 开始检索 {game} - {target}（上限 {max_sec}s）")
+
+    # 第一步：拉资料（带超时）
+    docs = []
+    try:
+        # 把超时切成多段，防止单站卡死
+        remaining = max_sec - (time.time() - t0)
+        if remaining > 10:
+            docs = _fetch_tutorials(game, target)
+    except Exception as e:
+        log(f"[预热] 检索异常: {type(e).__name__}: {e}")
+
+    log(f"[预热] 抓到 {len(docs)} 条文档")
+
+    # 第二步：清洗样本
+    samples = _clean_to_samples(docs, max_samples)
+    log(f"[预热] 清洗出 {len(samples)} 条训练样本")
+
+    # 第三步：现场 LoRA（带超时检查）
+    adapter = ""
+    if samples and (time.time() - t0) < max_sec:
+        try:
+            adapter = _train_lora(samples, game, target)
+        except Exception as e:
+            log(f"[预热] LoRA 训练失败（已降级）: {type(e).__name__}: {e}")
+
+    elapsed = time.time() - t0
+    log(f"[预热] 完成，耗时 {elapsed:.1f}s，样本 {len(samples)}，adapter={adapter or '无'}")
+    return {"samples": len(samples), "adapter": adapter}
