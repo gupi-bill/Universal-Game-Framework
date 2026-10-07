@@ -13,7 +13,7 @@ GUIDE = """# Universal-Game-Framework · 单文件游戏 Agent 使用手册
     python agent.py guide                        # 看这份手册
 
 ## 全部命令
-    run      主循环（--rounds N / --interval S / --game NAME / --dry-run）
+    run      主循环（--rounds N / --interval S / --hours H / --resume / --game NAME / --dry-run）
     mode     查看运行模式（dry-run / 感知后端 / LLM / VLM / 当前游戏）
     guide    本手册
     perceive 手工取一帧画面状态
@@ -28,7 +28,8 @@ GUIDE = """# Universal-Game-Framework · 单文件游戏 Agent 使用手册
     bench    性能基准：--rounds N，分段计时 感知/预判/评估/决策/动作
     panel    本地监控面板（纯标准库，只读快照/事件/日志，Ctrl+C 停止）
     logs     查看运行日志：--tail N / --grep KW / --events --kind decision / --stats
-    session  看会话记忆与历史战绩
+    session  看会话记忆与历史战绩（--all 全部游戏汇总）
+    brief    开局侦察报告：档案/知识库/战绩/调参一屏聚合
     tune     自动调参：tune --status / tune --reset
     selftest 离线自检：不碰键鼠、不用密钥，跑通全链路并断言关键产物
 
@@ -59,7 +60,8 @@ def _print(obj):
 
 def _cli_kb(args) -> int:
     sub = args.kb_cmd
-    game = args.game or active_game()
+    # 全局 --game 已由 main() 导出到 AGENT_GAME，这里直接取激活游戏即可
+    game = active_game()
     if sub == "list":
         _print(kb_list(game) if not args.all else kb_list())
     elif sub == "search":
@@ -181,7 +183,8 @@ def build_parser() -> argparse.ArgumentParser:
         epilog="示例：\n  python agent.py run --dry-run --rounds 20\n"
         "  python agent.py selftest\n  python agent.py guide",
     )
-    ap.add_argument("--game", default="", help="指定游戏名（读 game_profiles/<名字>.yaml）")
+    # dest 与子命令位置参数 game 区分开：--game 是全局切换，位置参数只作用于该子命令
+    ap.add_argument("--game", default="", dest="game_opt", help="指定游戏名（读 game_profiles/<名字>.yaml）")
     ap.add_argument("--version", action="store_true", help="打印版本号并退出")
     sub = ap.add_subparsers(dest="cmd")
 
@@ -189,12 +192,15 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--rounds", type=int, default=0, help="最多跑多少回合（0=不限）")
     sp.add_argument("--interval", type=float, default=None, help="每回合间隔秒（默认取配置）")
     sp.add_argument("--dry-run", action="store_true", help="只记录动作，不碰真实键鼠")
+    sp.add_argument("--hours", type=float, default=0.0, help="时长上限小时（0=不限，ROADMAP v2 #6）")
+    sp.add_argument("--resume", action="store_true", help="从循环检查点续跑（ROADMAP v2 #6）")
 
     sub.add_parser("mode", help="查看运行模式")
     sub.add_parser("guide", help="使用手册")
     sub.add_parser("perceive", help="手工取一帧画面状态")
     sub.add_parser("predict", help="手工取一帧 + 全实体预判")
-    sub.add_parser("session", help="会话记忆与历史战绩")
+    sp = sub.add_parser("session", help="会话记忆与历史战绩")
+    sp.add_argument("--all", action="store_true", help="全部游戏汇总（ROADMAP v2 #5）")
     sub.add_parser("afk", help="AFK 弹窗处理指引")
 
     sp = sub.add_parser("action", help="执行一个动作")
@@ -271,6 +277,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("bench", help="分段耗时基准（mock+dry-run，规则决策）")
     sp.add_argument("--rounds", type=int, default=200, help="基准回合数（默认 200）")
+
+    sp = sub.add_parser("brief", help="开局侦察报告（档案/知识库/战绩/调参一屏）")
+    sp.add_argument("game", nargs="?", default="", help="指定游戏（缺省=当前）")
     return ap
 
 
@@ -280,8 +289,8 @@ def main(argv=None) -> int:
     if args.version:
         print(f"Universal-Game-Framework {VERSION}")
         return 0
-    if args.game:
-        os.environ["AGENT_GAME"] = args.game
+    if args.game_opt:
+        os.environ["AGENT_GAME"] = args.game_opt
         reload_config()
 
     cmd = args.cmd
@@ -293,7 +302,12 @@ def main(argv=None) -> int:
         if getattr(args, "dry_run", False):
             os.environ["UGF_DRY_RUN"] = "1"
             reload_config()
-        run_agent(max_rounds=args.rounds, interval=args.interval)
+        run_agent(
+            max_rounds=args.rounds,
+            interval=args.interval,
+            max_hours=args.hours,
+            resume=args.resume,
+        )
     elif cmd == "perceive":
         _print(Perception().perceive())
     elif cmd == "predict":
@@ -322,7 +336,9 @@ def main(argv=None) -> int:
     elif cmd == "report":
         notify()
     elif cmd == "session":
-        print(session_summary())
+        print(session_summary(all_games=args.all))
+    elif cmd == "brief":
+        return brief(args.game)
     elif cmd == "tune":
         if args.reset:
             print(auto_tuner_reset())

@@ -9,7 +9,43 @@ def _autopilot_action(state: FramePayload, predictions: list, ev: dict, kb_text:
     return llm_decide(state, predictions, ev, kb_text)
 
 
-def run_agent(max_rounds: int = 0, interval: float | None = None) -> dict:
+def _write_checkpoint(
+    path: str,
+    game: str,
+    rounds: int,
+    deaths: int,
+    set_switches: int,
+    deaths_cycle: int,
+    current_set: str,
+):
+    """ROADMAP v2 #6：主循环现场落盘，进程被杀后 run --resume 恢复。"""
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "schema_version": 1,
+                    "game": game,
+                    "rounds": rounds,
+                    "deaths": deaths,
+                    "set_switches": set_switches,
+                    "deaths_cycle": deaths_cycle,
+                    "current_set": current_set,
+                    "ts": datetime.now().isoformat(timespec="seconds"),
+                },
+                f,
+                ensure_ascii=False,
+            )
+    except OSError:
+        pass
+
+
+def run_agent(
+    max_rounds: int = 0,
+    interval: float | None = None,
+    max_hours: float = 0.0,
+    resume: bool = False,
+) -> dict:
     """主循环：感知 → 预判 → 评估 → 知识 → 决策 → 动作 → 记忆 → 复盘 → 汇报。"""
     interval = safe_float(interval if interval is not None else cfg_get("agent.loop_interval", 0.5), 0.5)
     game = active_game()
@@ -52,12 +88,36 @@ def run_agent(max_rounds: int = 0, interval: float | None = None) -> dict:
     last_boss_memory = 0.0
     paused = False
     t_start = time.time()
+    deadline = t_start + safe_float(max_hours) * 3600 if safe_float(max_hours) > 0 else 0.0
+    clean_exit = False
+    ckpt_path = os.path.join(RUN_LOGS, "loop_checkpoint.json")
+    ckpt_interval = safe_int(cfg_get("agent.checkpoint_interval", 30), 30)
+    if resume:
+        ck = _read_json(ckpt_path, {})
+        if isinstance(ck, dict) and ck:
+            if ck.get("game") == game:
+                rounds = safe_int(ck.get("rounds"))
+                deaths = safe_int(ck.get("deaths"))
+                set_switches = safe_int(ck.get("set_switches"))
+                deaths_cycle = safe_int(ck.get("deaths_cycle"))
+                if ck.get("current_set"):
+                    current_set = str(ck.get("current_set"))
+                log(
+                    f"[续跑] 检查点恢复：回合={rounds} 死亡={deaths} 套装={current_set}（{ck.get('ts', '?')}）"
+                )
+            else:
+                log(f"[续跑] 检查点属于游戏 {ck.get('game')!r}，与当前 {game!r} 不符，从头开始")
 
     log("[Agent] 进入游戏主循环...\n")
     try:
         while True:
             if max_rounds and rounds >= max_rounds:
                 log("[Agent] 达到最大轮数，退出")
+                clean_exit = True
+                break
+            if deadline and time.time() >= deadline:
+                log(f"[Agent] 达到时长上限 {max_hours}h，收尾退出")
+                clean_exit = True
                 break
             rounds += 1
 
@@ -199,6 +259,8 @@ def run_agent(max_rounds: int = 0, interval: float | None = None) -> dict:
                     game,
                     action_source=str(action.get("source") or ""),
                 )
+            if ckpt_interval > 0 and rounds % ckpt_interval == 0:
+                _write_checkpoint(ckpt_path, game, rounds, deaths, set_switches, deaths_cycle, current_set)
             if report_every and rounds % report_every == 0:
                 notify_progress(rounds, deaths)
 
@@ -259,6 +321,12 @@ def run_agent(max_rounds: int = 0, interval: float | None = None) -> dict:
             log("[汇报] " + "；".join(actions))
         except Exception as e:
             log(f"[汇报] 收尾失败: {e}")
+        if clean_exit:
+            with contextlib.suppress(OSError):
+                os.remove(ckpt_path)
+        elif rounds > 0:
+            _write_checkpoint(ckpt_path, game, rounds, deaths, set_switches, deaths_cycle, current_set)
+            log(f"[续跑] 非正常收尾，检查点已保存（回合={rounds}），run --resume 可恢复")
 
     return {
         "rounds": rounds,

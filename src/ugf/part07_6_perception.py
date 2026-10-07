@@ -27,6 +27,26 @@ def _player_stub() -> dict:
     }
 
 
+def _capture_region():
+    """capture_region 双格式（ROADMAP v2 #8）：dict 原样，"x,y,w,h" 字符串简写解析。
+
+    非法格式留日志并回落 None（全屏）。
+    """
+    raw = cfg_get("perception.capture_region", None)
+    if isinstance(raw, dict) and raw:
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        parts = [p.strip() for p in raw.split(",")]
+        if len(parts) == 4:
+            try:
+                v = [int(float(p)) for p in parts]
+                return {"left": v[0], "top": v[1], "width": v[2], "height": v[3]}
+            except ValueError:
+                pass
+        log(f'[感知] capture_region 格式非法（{raw!r}），回落全屏；应为 "x,y,w,h" 或 dict')
+    return None
+
+
 def _grab_screen():
     """mss 抓屏 → BGR ndarray。返回 (img, err)；依赖缺失给明确安装指引。"""
     try:
@@ -35,9 +55,9 @@ def _grab_screen():
     except ImportError as e:
         return None, f"抓屏需要 mss+numpy（pip install mss numpy）: {e}"
     try:
-        region = cfg_get("perception.capture_region", None)
+        region = _capture_region()
         with mss.mss() as sct:
-            mon = region if isinstance(region, dict) else sct.monitors[1]
+            mon = region if region else sct.monitors[1]
             shot = sct.grab(mon)
             img = np.asarray(shot, dtype="uint8")[:, :, :3].copy()  # BGRA -> BGR
         return img, ""

@@ -32,9 +32,9 @@ def test_history_legacy_list_and_new_dict(tmp_path, monkeypatch):
     agent._history_append({"at": "y", "game": "florr", "rounds": 2, "deaths": 0})
     raw = json.loads(hf.read_text(encoding="utf-8"))
     assert raw["schema_version"] == agent.STATE_SCHEMA_VERSION
-    assert len(raw["records"]) == 2
-    # 新格式再次读取
-    assert len(agent._read_history()) == 2
+    # v2（ROADMAP v2 #5）：战绩按游戏分区存储
+    assert len(raw["games"]["florr"]) == 2
+    assert len(agent._read_history("florr")) == 2
 
 
 def test_corrupt_state_falls_back_to_default(tmp_path, monkeypatch):

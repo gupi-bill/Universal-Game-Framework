@@ -403,6 +403,7 @@ DEFAULT = {
     "agent.kb_archive_dir": "knowledge_archive",
     "agent.corner_pause": True,  # 鼠标移到屏幕角落 = 安全暂停
     "agent.tune_locked": [],  # ROADMAP #13：人工锁定的参数（点分路径），调参跳过
+    "agent.checkpoint_interval": 30,  # ROADMAP v2 #6：每 N 回合落盘循环检查点（0=关）
     "review.enabled": True,  # ROADMAP #15：复盘总开关
     "review.trigger_boss": True,  # BOSS 局触发复盘
     "review.trigger_team": True,  # 组队局触发复盘
@@ -2030,6 +2031,26 @@ def _player_stub() -> dict:
     }
 
 
+def _capture_region():
+    """capture_region 双格式（ROADMAP v2 #8）：dict 原样，"x,y,w,h" 字符串简写解析。
+
+    非法格式留日志并回落 None（全屏）。
+    """
+    raw = cfg_get("perception.capture_region", None)
+    if isinstance(raw, dict) and raw:
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        parts = [p.strip() for p in raw.split(",")]
+        if len(parts) == 4:
+            try:
+                v = [int(float(p)) for p in parts]
+                return {"left": v[0], "top": v[1], "width": v[2], "height": v[3]}
+            except ValueError:
+                pass
+        log(f'[感知] capture_region 格式非法（{raw!r}），回落全屏；应为 "x,y,w,h" 或 dict')
+    return None
+
+
 def _grab_screen():
     """mss 抓屏 → BGR ndarray。返回 (img, err)；依赖缺失给明确安装指引。"""
     try:
@@ -2038,9 +2059,9 @@ def _grab_screen():
     except ImportError as e:
         return None, f"抓屏需要 mss+numpy（pip install mss numpy）: {e}"
     try:
-        region = cfg_get("perception.capture_region", None)
+        region = _capture_region()
         with mss.mss() as sct:
-            mon = region if isinstance(region, dict) else sct.monitors[1]
+            mon = region if region else sct.monitors[1]
             shot = sct.grab(mon)
             img = np.asarray(shot, dtype="uint8")[:, :, :3].copy()  # BGRA -> BGR
         return img, ""
@@ -2528,34 +2549,37 @@ SNAP_FILE = os.path.join(RUN_LOGS, "agent_snapshot.json")
 
 # ROADMAP #18：状态文件结构版本化——读取时自动迁移，写入时打版本号，
 # 未来改结构不会弄坏老用户的断点续玩与历史战绩。
-STATE_SCHEMA_VERSION = 1
+STATE_SCHEMA_VERSION = 2
 
 
-def _migrate_state_v0_to_v1(st: dict) -> dict:
-    """v0（无版本号）→ v1：字段结构不变，仅补版本号；未来字段改名在此挂钩。"""
-    st = dict(st)
-    st["schema_version"] = 1
-    return st
+def _migrate_state_file(raw) -> dict:
+    """状态文件容器迁移（ROADMAP v2 #5）：v0/v1 平铺单游戏 → v2 按游戏分区。
+
+    v2 形态：{"schema_version": 2, "games": {<game>: {...状态字段...}}}
+    旧平铺数据归入其 game 字段所指游戏（缺省归当前激活游戏），零丢失。
+    """
+    if not isinstance(raw, dict):
+        return {"schema_version": STATE_SCHEMA_VERSION, "games": {}}
+    if safe_int(raw.get("schema_version")) >= 2 and isinstance(raw.get("games"), dict):
+        return raw
+    g = safe_name(str(raw.get("game") or active_game())) or "default"
+    flat = {k: v for k, v in raw.items() if k != "schema_version"}
+    return {"schema_version": STATE_SCHEMA_VERSION, "games": {g: flat}}
 
 
-_STATE_MIGRATIONS = {0: _migrate_state_v0_to_v1}
+def _read_state_container() -> dict:
+    try:
+        with open(STATE_FILE, encoding="utf-8") as f:
+            raw = json.load(f)
+    except Exception:
+        return {"schema_version": STATE_SCHEMA_VERSION, "games": {}}
+    return _migrate_state_file(raw)
 
 
-def _migrate_state(st: dict) -> dict:
-    """按 schema_version 逐级执行迁移直到当前版本。"""
-    ver = safe_int(st.get("schema_version"), 0)
-    while ver < STATE_SCHEMA_VERSION:
-        fn = _STATE_MIGRATIONS.get(ver)
-        if fn is None:
-            break
-        st = fn(st)
-        ver = safe_int(st.get("schema_version"), ver + 1)
-    return st
-
-
-def session_load() -> dict:
+def session_load(game: str = "") -> dict:
+    g = safe_name(game or active_game()) or "default"
     default = {
-        "game": active_game(),
+        "game": g,
         "status": "idle",
         "last_played": None,
         "last_rounds": 0,
@@ -2567,31 +2591,33 @@ def session_load() -> dict:
         "resume_point": None,
         "started_at": datetime.now().isoformat(timespec="seconds"),
     }
-    try:
-        with open(STATE_FILE, encoding="utf-8") as f:
-            st = json.load(f)
-    except Exception:
-        return default
+    st = _read_state_container().get("games", {}).get(g)
     if not isinstance(st, dict):
         return default
-    st = _migrate_state(st)
     default.update(st)
+    default["game"] = g
     return default
 
 
-def session_save(state: dict):
+def session_save(state: dict, game: str = ""):
+    g = safe_name(game or state.get("game") or active_game()) or "default"
+    container = _read_state_container()
+    games = container.setdefault("games", {})
+    st = dict(state)
+    st.pop("schema_version", None)
+    st["game"] = g
+    games[g] = st
+    container["schema_version"] = STATE_SCHEMA_VERSION
     try:
-        state = dict(state)
-        state["schema_version"] = STATE_SCHEMA_VERSION
         with open(STATE_FILE, "w", encoding="utf-8") as f:
-            json.dump(state, f, ensure_ascii=False, indent=2)
+            json.dump(container, f, ensure_ascii=False, indent=2)
     except (OSError, TypeError, ValueError) as e:
         raise RuntimeError(f"会话档案保存失败: {e}") from e
 
 
 def session_record_start(game: str) -> bool:
     """开玩前调用；返回是否可「续玩」。"""
-    st = session_load()
+    st = session_load(game)
     prev = safe_int(st.get("last_rounds"))
     resumable = bool(st.get("last_played")) or prev > 0
     st["resume_point"] = (
@@ -2604,12 +2630,12 @@ def session_record_start(game: str) -> bool:
         if resumable
         else None
     )
-    session_save(st)
+    session_save(st, game)
     return resumable
 
 
 def session_record_end(game: str, rounds: int, deaths: int, report: str = ""):
-    st = session_load()
+    st = session_load(game)
     rounds, deaths = safe_int(rounds), safe_int(deaths)
     st.update(
         {
@@ -2624,40 +2650,84 @@ def session_record_end(game: str, rounds: int, deaths: int, report: str = ""):
             "resume_point": None,
         }
     )
-    session_save(st)
+    session_save(st, game)
     _history_append({"at": st["last_played"], "game": game, "rounds": rounds, "deaths": deaths})
 
 
-def _read_history() -> list:
-    """战绩历史双格式兼容（ROADMAP #18）：
-    旧格式 = 纯列表；新格式 = {"schema_version": N, "records": [...]}。"""
-    raw = _read_json(HISTORY_FILE, [])
-    if isinstance(raw, dict):
-        recs = raw.get("records")
-        return [r for r in recs if isinstance(r, dict)] if isinstance(recs, list) else []
+def _migrate_history_file(raw) -> dict:
+    """战绩容器迁移：v0 纯列表 / v1 {"records":[]} → v2 按游戏分区。"""
+    if (
+        isinstance(raw, dict)
+        and safe_int(raw.get("schema_version")) >= 2
+        and isinstance(raw.get("games"), dict)
+    ):
+        return raw
+    recs = []
     if isinstance(raw, list):
-        return [r for r in raw if isinstance(r, dict)]
-    return []
+        recs = [r for r in raw if isinstance(r, dict)]
+    elif isinstance(raw, dict) and isinstance(raw.get("records"), list):
+        recs = [r for r in raw["records"] if isinstance(r, dict)]
+    games: dict = {}
+    for r in recs:
+        g = safe_name(str(r.get("game") or "")) or "default"
+        games.setdefault(g, []).append(r)
+    return {"schema_version": STATE_SCHEMA_VERSION, "games": games}
+
+
+def _read_history_container() -> dict:
+    return _migrate_history_file(_read_json(HISTORY_FILE, []))
+
+
+def _read_history(game: str = "") -> list:
+    """某游戏的战绩记录（缺省当前游戏）。"""
+    g = safe_name(game or active_game()) or "default"
+    recs = _read_history_container().get("games", {}).get(g)
+    return [r for r in recs if isinstance(r, dict)] if isinstance(recs, list) else []
+
+
+def _history_all() -> list:
+    """全部游戏战绩，按时间排序。"""
+    out: list = []
+    for recs in _read_history_container().get("games", {}).values():
+        out.extend(r for r in recs if isinstance(r, dict))
+    out.sort(key=lambda r: str(r.get("at") or ""))
+    return out
 
 
 def _history_append(record: dict):
-    h = _read_history()
-    h.append(record)
-    payload = {"schema_version": STATE_SCHEMA_VERSION, "records": h[-100:]}
+    container = _read_history_container()
+    g = safe_name(str(record.get("game") or "")) or "default"
+    games = container.setdefault("games", {})
+    recs = games.setdefault(g, [])
+    recs.append(record)
+    games[g] = recs[-100:]
+    container["schema_version"] = STATE_SCHEMA_VERSION
     try:
         with open(HISTORY_FILE, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
+            json.dump(container, f, ensure_ascii=False, indent=2)
     except OSError:
         pass
 
 
-def session_summary() -> str:
-    st = session_load()
-    played = _read_history()
+def session_summary(game: str = "", all_games: bool = False) -> str:
+    if all_games:
+        played = _history_all()
+        st = {
+            "sessions": len(played),
+            "total_deaths": sum(safe_int(r.get("deaths")) for r in played),
+            "last_played": max((str(r.get("at") or "") for r in played), default=""),
+            "last_rounds": 0,
+        }
+        head = "会话(全部游戏汇总)"
+    else:
+        g = safe_name(game or active_game()) or "default"
+        st = session_load(g)
+        played = _read_history(g)
+        head = f"会话({g})"
     total_rounds = sum(safe_int(r.get("rounds")) for r in played)
     total_deaths = sum(safe_int(r.get("deaths")) for r in played)
     line = (
-        f"会话：玩过 {safe_int(st.get('sessions'))} 场 ｜ 本次/上次回合 {safe_int(st.get('last_rounds'))} "
+        f"{head}：玩过 {safe_int(st.get('sessions'))} 场 ｜ 本次/上次回合 {safe_int(st.get('last_rounds'))} "
         f"｜ 累计死亡 {safe_int(st.get('total_deaths'))}\n"
         f"战绩历史：{len(played)} 局，合计 {total_rounds} 回合 / {total_deaths} 死亡\n"
         f"上次游玩：{st.get('last_played') or '（无）'}"
@@ -3701,7 +3771,43 @@ def _autopilot_action(state: FramePayload, predictions: list, ev: dict, kb_text:
     return llm_decide(state, predictions, ev, kb_text)
 
 
-def run_agent(max_rounds: int = 0, interval: float | None = None) -> dict:
+def _write_checkpoint(
+    path: str,
+    game: str,
+    rounds: int,
+    deaths: int,
+    set_switches: int,
+    deaths_cycle: int,
+    current_set: str,
+):
+    """ROADMAP v2 #6：主循环现场落盘，进程被杀后 run --resume 恢复。"""
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "schema_version": 1,
+                    "game": game,
+                    "rounds": rounds,
+                    "deaths": deaths,
+                    "set_switches": set_switches,
+                    "deaths_cycle": deaths_cycle,
+                    "current_set": current_set,
+                    "ts": datetime.now().isoformat(timespec="seconds"),
+                },
+                f,
+                ensure_ascii=False,
+            )
+    except OSError:
+        pass
+
+
+def run_agent(
+    max_rounds: int = 0,
+    interval: float | None = None,
+    max_hours: float = 0.0,
+    resume: bool = False,
+) -> dict:
     """主循环：感知 → 预判 → 评估 → 知识 → 决策 → 动作 → 记忆 → 复盘 → 汇报。"""
     interval = safe_float(interval if interval is not None else cfg_get("agent.loop_interval", 0.5), 0.5)
     game = active_game()
@@ -3744,12 +3850,36 @@ def run_agent(max_rounds: int = 0, interval: float | None = None) -> dict:
     last_boss_memory = 0.0
     paused = False
     t_start = time.time()
+    deadline = t_start + safe_float(max_hours) * 3600 if safe_float(max_hours) > 0 else 0.0
+    clean_exit = False
+    ckpt_path = os.path.join(RUN_LOGS, "loop_checkpoint.json")
+    ckpt_interval = safe_int(cfg_get("agent.checkpoint_interval", 30), 30)
+    if resume:
+        ck = _read_json(ckpt_path, {})
+        if isinstance(ck, dict) and ck:
+            if ck.get("game") == game:
+                rounds = safe_int(ck.get("rounds"))
+                deaths = safe_int(ck.get("deaths"))
+                set_switches = safe_int(ck.get("set_switches"))
+                deaths_cycle = safe_int(ck.get("deaths_cycle"))
+                if ck.get("current_set"):
+                    current_set = str(ck.get("current_set"))
+                log(
+                    f"[续跑] 检查点恢复：回合={rounds} 死亡={deaths} 套装={current_set}（{ck.get('ts', '?')}）"
+                )
+            else:
+                log(f"[续跑] 检查点属于游戏 {ck.get('game')!r}，与当前 {game!r} 不符，从头开始")
 
     log("[Agent] 进入游戏主循环...\n")
     try:
         while True:
             if max_rounds and rounds >= max_rounds:
                 log("[Agent] 达到最大轮数，退出")
+                clean_exit = True
+                break
+            if deadline and time.time() >= deadline:
+                log(f"[Agent] 达到时长上限 {max_hours}h，收尾退出")
+                clean_exit = True
                 break
             rounds += 1
 
@@ -3891,6 +4021,8 @@ def run_agent(max_rounds: int = 0, interval: float | None = None) -> dict:
                     game,
                     action_source=str(action.get("source") or ""),
                 )
+            if ckpt_interval > 0 and rounds % ckpt_interval == 0:
+                _write_checkpoint(ckpt_path, game, rounds, deaths, set_switches, deaths_cycle, current_set)
             if report_every and rounds % report_every == 0:
                 notify_progress(rounds, deaths)
 
@@ -3951,6 +4083,12 @@ def run_agent(max_rounds: int = 0, interval: float | None = None) -> dict:
             log("[汇报] " + "；".join(actions))
         except Exception as e:
             log(f"[汇报] 收尾失败: {e}")
+        if clean_exit:
+            with contextlib.suppress(OSError):
+                os.remove(ckpt_path)
+        elif rounds > 0:
+            _write_checkpoint(ckpt_path, game, rounds, deaths, set_switches, deaths_cycle, current_set)
+            log(f"[续跑] 非正常收尾，检查点已保存（回合={rounds}），run --resume 可恢复")
 
     return {
         "rounds": rounds,
@@ -4463,6 +4601,55 @@ def doctor(game: str = "") -> int:
     return 1 if fatal else 0
 
 
+def brief(game: str = "") -> int:
+    """ROADMAP v2 #7：开局侦察报告——档案/知识库/战绩/调参一屏聚合。"""
+    g = safe_name(game or active_game()) or active_game()
+    print(f"== UGF Brief · {g} · v{VERSION} ==")
+    print(f"[模式] {runtime_mode_text()}")
+
+    prof = _read_yaml(os.path.join(PROFILE_DIR, f"{g}.yaml"))
+    if prof:
+        desc = str((prof.get("game") or {}).get("description") or "")
+        pred = prof.get("predictor") or {}
+        combat = prof.get("combat") or {}
+        tiers = "/".join(
+            str(len(pred.get(k) or []))
+            for k in ("rarity_highest_boss", "rarity_boss", "rarity_elite", "rarity_normal")
+        )
+        issues = profile_check_one(g)
+        n_err = sum(1 for i in issues if i[0] == "ERROR")
+        n_warn = sum(1 for i in issues if i[0] == "WARN")
+        print(f"[档案] {desc[:50] or '(无描述)'}")
+        print(f"       稀有度档数(最高/BOSS/精英/普通)={tiers} ｜ 套装={combat.get('sets')}")
+        print(f"       默认套装={combat.get('default_set')} ｜ 战术 {len(combat.get('tactics') or [])} 条")
+        verdict = "✓ 通过" if not n_err else f"✗ {n_err} 错误"
+        print(f"       档案校验：{verdict}" + (f" / {n_warn} 警告" if n_warn else ""))
+    else:
+        print(f"[档案] game_profiles/{g}.yaml 不存在，使用内置默认（接入新游戏见 _template.yaml）")
+
+    d = kb_game_dir(g)
+    if os.path.isdir(d):
+        files = [f for f in os.listdir(d) if f.endswith(".md")]
+        hist_dir = os.path.join(KB_DIR, KB_HISTORY_DIRNAME)
+        n_hist = 0
+        if os.path.isdir(hist_dir):
+            for hf in os.listdir(hist_dir):
+                if not hf.endswith(".jsonl"):
+                    continue
+                try:
+                    with open(os.path.join(hist_dir, hf), encoding="utf-8") as f:
+                        n_hist += sum(1 for line in f if line.strip())
+                except OSError:
+                    pass
+        print(f"[知识库] {len(files)} 篇 / {_dir_mb(d):.2f} MB ｜ 历史修订 {n_hist} 条")
+    else:
+        print("[知识库] （空 — 首次运行会自动补种 seed 知识）")
+
+    print("[战绩] " + session_summary(g).replace("\n", "\n       "))
+    print("[调参] " + auto_tuner_status().replace("\n", "\n       "))
+    return 0
+
+
 def bench(rounds: int = 200) -> int:
     """ROADMAP v2 #2：分段耗时基准（强制 mock + dry-run，规则决策，零外部依赖）。
 
@@ -4566,7 +4753,7 @@ GUIDE = """# Universal-Game-Framework · 单文件游戏 Agent 使用手册
     python agent.py guide                        # 看这份手册
 
 ## 全部命令
-    run      主循环（--rounds N / --interval S / --game NAME / --dry-run）
+    run      主循环（--rounds N / --interval S / --hours H / --resume / --game NAME / --dry-run）
     mode     查看运行模式（dry-run / 感知后端 / LLM / VLM / 当前游戏）
     guide    本手册
     perceive 手工取一帧画面状态
@@ -4581,7 +4768,8 @@ GUIDE = """# Universal-Game-Framework · 单文件游戏 Agent 使用手册
     bench    性能基准：--rounds N，分段计时 感知/预判/评估/决策/动作
     panel    本地监控面板（纯标准库，只读快照/事件/日志，Ctrl+C 停止）
     logs     查看运行日志：--tail N / --grep KW / --events --kind decision / --stats
-    session  看会话记忆与历史战绩
+    session  看会话记忆与历史战绩（--all 全部游戏汇总）
+    brief    开局侦察报告：档案/知识库/战绩/调参一屏聚合
     tune     自动调参：tune --status / tune --reset
     selftest 离线自检：不碰键鼠、不用密钥，跑通全链路并断言关键产物
 
@@ -4612,7 +4800,8 @@ def _print(obj):
 
 def _cli_kb(args) -> int:
     sub = args.kb_cmd
-    game = args.game or active_game()
+    # 全局 --game 已由 main() 导出到 AGENT_GAME，这里直接取激活游戏即可
+    game = active_game()
     if sub == "list":
         _print(kb_list(game) if not args.all else kb_list())
     elif sub == "search":
@@ -4734,7 +4923,8 @@ def build_parser() -> argparse.ArgumentParser:
         epilog="示例：\n  python agent.py run --dry-run --rounds 20\n"
         "  python agent.py selftest\n  python agent.py guide",
     )
-    ap.add_argument("--game", default="", help="指定游戏名（读 game_profiles/<名字>.yaml）")
+    # dest 与子命令位置参数 game 区分开：--game 是全局切换，位置参数只作用于该子命令
+    ap.add_argument("--game", default="", dest="game_opt", help="指定游戏名（读 game_profiles/<名字>.yaml）")
     ap.add_argument("--version", action="store_true", help="打印版本号并退出")
     sub = ap.add_subparsers(dest="cmd")
 
@@ -4742,12 +4932,15 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--rounds", type=int, default=0, help="最多跑多少回合（0=不限）")
     sp.add_argument("--interval", type=float, default=None, help="每回合间隔秒（默认取配置）")
     sp.add_argument("--dry-run", action="store_true", help="只记录动作，不碰真实键鼠")
+    sp.add_argument("--hours", type=float, default=0.0, help="时长上限小时（0=不限，ROADMAP v2 #6）")
+    sp.add_argument("--resume", action="store_true", help="从循环检查点续跑（ROADMAP v2 #6）")
 
     sub.add_parser("mode", help="查看运行模式")
     sub.add_parser("guide", help="使用手册")
     sub.add_parser("perceive", help="手工取一帧画面状态")
     sub.add_parser("predict", help="手工取一帧 + 全实体预判")
-    sub.add_parser("session", help="会话记忆与历史战绩")
+    sp = sub.add_parser("session", help="会话记忆与历史战绩")
+    sp.add_argument("--all", action="store_true", help="全部游戏汇总（ROADMAP v2 #5）")
     sub.add_parser("afk", help="AFK 弹窗处理指引")
 
     sp = sub.add_parser("action", help="执行一个动作")
@@ -4824,6 +5017,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("bench", help="分段耗时基准（mock+dry-run，规则决策）")
     sp.add_argument("--rounds", type=int, default=200, help="基准回合数（默认 200）")
+
+    sp = sub.add_parser("brief", help="开局侦察报告（档案/知识库/战绩/调参一屏）")
+    sp.add_argument("game", nargs="?", default="", help="指定游戏（缺省=当前）")
     return ap
 
 
@@ -4833,8 +5029,8 @@ def main(argv=None) -> int:
     if args.version:
         print(f"Universal-Game-Framework {VERSION}")
         return 0
-    if args.game:
-        os.environ["AGENT_GAME"] = args.game
+    if args.game_opt:
+        os.environ["AGENT_GAME"] = args.game_opt
         reload_config()
 
     cmd = args.cmd
@@ -4846,7 +5042,12 @@ def main(argv=None) -> int:
         if getattr(args, "dry_run", False):
             os.environ["UGF_DRY_RUN"] = "1"
             reload_config()
-        run_agent(max_rounds=args.rounds, interval=args.interval)
+        run_agent(
+            max_rounds=args.rounds,
+            interval=args.interval,
+            max_hours=args.hours,
+            resume=args.resume,
+        )
     elif cmd == "perceive":
         _print(Perception().perceive())
     elif cmd == "predict":
@@ -4875,7 +5076,9 @@ def main(argv=None) -> int:
     elif cmd == "report":
         notify()
     elif cmd == "session":
-        print(session_summary())
+        print(session_summary(all_games=args.all))
+    elif cmd == "brief":
+        return brief(args.game)
     elif cmd == "tune":
         if args.reset:
             print(auto_tuner_reset())

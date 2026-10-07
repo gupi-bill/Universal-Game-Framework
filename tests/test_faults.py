@@ -105,7 +105,7 @@ def test_corrupt_history_read(tmp_path, monkeypatch):
     monkeypatch.setattr(agent, "HISTORY_FILE", str(hf))
     assert agent._read_history() == []
     agent._history_append({"at": "x", "game": "g", "rounds": 1, "deaths": 0})
-    assert len(agent._read_history()) == 1
+    assert len(agent._read_history("g")) == 1
 
 
 def test_corrupt_config_yaml_defaults_survive(tmp_path, monkeypatch):

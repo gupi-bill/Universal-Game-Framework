@@ -80,6 +80,7 @@ DEFAULT = {
     "agent.kb_archive_dir": "knowledge_archive",
     "agent.corner_pause": True,  # 鼠标移到屏幕角落 = 安全暂停
     "agent.tune_locked": [],  # ROADMAP #13：人工锁定的参数（点分路径），调参跳过
+    "agent.checkpoint_interval": 30,  # ROADMAP v2 #6：每 N 回合落盘循环检查点（0=关）
     "review.enabled": True,  # ROADMAP #15：复盘总开关
     "review.trigger_boss": True,  # BOSS 局触发复盘
     "review.trigger_team": True,  # 组队局触发复盘

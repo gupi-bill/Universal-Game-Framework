@@ -22,6 +22,7 @@ perception:
   skip_on_timeout: 0.8         # 超时时休眠秒数，给 CPU 喘息
   screen_w: 1920               # 越界过滤用屏幕尺寸（可被实际分辨率覆盖）
   screen_h: 1080
+  capture_region: ""           # local/template 抓屏区域："x,y,w,h" 简写或 mss dict；空=全屏（ROADMAP v2 #8）
   source_w: 0                  # 感知后端坐标系宽（0=与逻辑屏一致不缩放；ROADMAP #19）
   source_h: 0                  # 感知后端坐标系高
   # ---- local 后端（ROADMAP #6）----
@@ -97,6 +98,7 @@ agent:
   learning_stats_interval: 24  # 学习命中统计落盘轮数
   report_every: 0              # v1.7 局中定时汇报间隔(轮数，0=关闭；>0 则每 N 轮上报一次进度)
   tune_locked: []              # 人工锁定的参数（如 [combat.retreat_ratio]），调参跳过（ROADMAP #13）
+  checkpoint_interval: 30      # 每 N 回合落盘循环检查点，run --resume 可续跑（ROADMAP v2 #6，0=关）
 
 # ROADMAP #15：死亡复盘触发与模板（可按游戏档案覆盖）
 review:

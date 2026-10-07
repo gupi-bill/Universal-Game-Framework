@@ -288,6 +288,55 @@ def doctor(game: str = "") -> int:
     return 1 if fatal else 0
 
 
+def brief(game: str = "") -> int:
+    """ROADMAP v2 #7：开局侦察报告——档案/知识库/战绩/调参一屏聚合。"""
+    g = safe_name(game or active_game()) or active_game()
+    print(f"== UGF Brief · {g} · v{VERSION} ==")
+    print(f"[模式] {runtime_mode_text()}")
+
+    prof = _read_yaml(os.path.join(PROFILE_DIR, f"{g}.yaml"))
+    if prof:
+        desc = str((prof.get("game") or {}).get("description") or "")
+        pred = prof.get("predictor") or {}
+        combat = prof.get("combat") or {}
+        tiers = "/".join(
+            str(len(pred.get(k) or []))
+            for k in ("rarity_highest_boss", "rarity_boss", "rarity_elite", "rarity_normal")
+        )
+        issues = profile_check_one(g)
+        n_err = sum(1 for i in issues if i[0] == "ERROR")
+        n_warn = sum(1 for i in issues if i[0] == "WARN")
+        print(f"[档案] {desc[:50] or '(无描述)'}")
+        print(f"       稀有度档数(最高/BOSS/精英/普通)={tiers} ｜ 套装={combat.get('sets')}")
+        print(f"       默认套装={combat.get('default_set')} ｜ 战术 {len(combat.get('tactics') or [])} 条")
+        verdict = "✓ 通过" if not n_err else f"✗ {n_err} 错误"
+        print(f"       档案校验：{verdict}" + (f" / {n_warn} 警告" if n_warn else ""))
+    else:
+        print(f"[档案] game_profiles/{g}.yaml 不存在，使用内置默认（接入新游戏见 _template.yaml）")
+
+    d = kb_game_dir(g)
+    if os.path.isdir(d):
+        files = [f for f in os.listdir(d) if f.endswith(".md")]
+        hist_dir = os.path.join(KB_DIR, KB_HISTORY_DIRNAME)
+        n_hist = 0
+        if os.path.isdir(hist_dir):
+            for hf in os.listdir(hist_dir):
+                if not hf.endswith(".jsonl"):
+                    continue
+                try:
+                    with open(os.path.join(hist_dir, hf), encoding="utf-8") as f:
+                        n_hist += sum(1 for line in f if line.strip())
+                except OSError:
+                    pass
+        print(f"[知识库] {len(files)} 篇 / {_dir_mb(d):.2f} MB ｜ 历史修订 {n_hist} 条")
+    else:
+        print("[知识库] （空 — 首次运行会自动补种 seed 知识）")
+
+    print("[战绩] " + session_summary(g).replace("\n", "\n       "))
+    print("[调参] " + auto_tuner_status().replace("\n", "\n       "))
+    return 0
+
+
 def bench(rounds: int = 200) -> int:
     """ROADMAP v2 #2：分段耗时基准（强制 mock + dry-run，规则决策，零外部依赖）。
 
