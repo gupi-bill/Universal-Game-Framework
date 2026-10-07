@@ -85,3 +85,60 @@ def test_parse_yolo_output_transposed_and_empty():
     np = pytest.importorskip("numpy")
     assert agent._parse_yolo_output([np.zeros((3, 6), dtype="float32")], 1920, 1080, 640, 0.5, [], {}) == []
     assert agent._parse_yolo_output([np.zeros((0,), dtype="float32")], 100, 100, 640, 0.5, [], {}) == []
+
+
+# ---------------------------------------------------------------------------
+# #14 视频学习增强
+# ---------------------------------------------------------------------------
+def test_avg_hash_and_hamming(tmp_path):
+    """合成纯色 PNG：同色哈希相同，异色汉明距离大。"""
+    p1 = agent._write_png(str(tmp_path / "a.png"), 64, 48, (200, 30, 30))
+    p2 = agent._write_png(str(tmp_path / "b.png"), 64, 48, (200, 30, 30))
+    p3 = agent._write_png(str(tmp_path / "c.png"), 64, 48, (10, 240, 240))
+    h1, h2, h3 = agent._avg_hash(p1), agent._avg_hash(p2), agent._avg_hash(p3)
+    assert h1 is not None and h1 == h2
+    assert isinstance(h3, int)
+    assert agent._hamming(h1, h2) == 0
+
+
+def test_dedup_frames_skips_duplicates(tmp_path, monkeypatch):
+    paths = [agent._write_png(str(tmp_path / f"f{i}.png"), 32, 24, (i * 60 % 256, 90, 120)) for i in range(2)]
+    dup = agent._write_png(str(tmp_path / "dup.png"), 32, 24, (0, 90, 120))  # 与 f0 同色
+    monkeypatch.setattr(agent, "_CFG", {"learn": {"hash_dedup": True, "hash_threshold": 5}})
+    kept, skipped = agent._dedup_frames(paths + [dup])
+    assert skipped == 1 and len(kept) == 2
+    # 关闭去重则全保留
+    monkeypatch.setattr(agent, "_CFG", {"learn": {"hash_dedup": False}})
+    kept, skipped = agent._dedup_frames(paths + [dup])
+    assert skipped == 0 and len(kept) == 3
+
+
+def test_vote_tactics():
+    tactics = [
+        "低血量时立即撤退不要恋战",
+        "低血量时立即撤退，不要恋战！",  # 与上一条相似 → 2 票
+        "集火清理低威胁目标保持场面干净",  # 仅 1 票
+        "[未配置 VLM_API_URL / VLM_API_KEY，跳过 VLM]",  # 无效句直接过滤
+    ]
+    voted = agent._vote_tactics(tactics, min_votes=2)
+    assert len(voted) == 1 and "撤退" in voted[0]
+    # min_votes=1 时两条都进
+    assert len(agent._vote_tactics(tactics, min_votes=1)) == 2
+
+
+def test_vlm_prompt_override(monkeypatch):
+    monkeypatch.setattr(agent, "_CFG", {"llm": {"vlm_prompt": "自定义提示词"}})
+    assert agent._vlm_prompt() == "自定义提示词"
+    monkeypatch.setattr(agent, "_CFG", {"llm": {"vlm_prompt": ""}})
+    assert agent._vlm_prompt() == agent.VLM_PROMPT
+
+
+def test_learn_from_video_pipeline_offline(tmp_path, monkeypatch):
+    """离线全链路：无 VLM 时 kept=0 但产物文件与统计字段齐全。"""
+    monkeypatch.setattr(agent, "FRAME_DIR", str(tmp_path / "frames"))
+    monkeypatch.setattr(agent, "KB_DIR", str(tmp_path / "kb"))
+    res = agent.learn_from_video(None, frame_count=5)
+    assert os.path.exists(res["file"])
+    assert res["frames"] == 5
+    assert res["kept"] == 0 and res["voted"] == 0
+    assert "dedup_skipped" in res

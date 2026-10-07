@@ -341,6 +341,11 @@ DEFAULT = {
     "llm.system_prompt": "",
     "llm.max_tokens": 800,
     "llm.temperature": 0.3,
+    "llm.vlm_prompt": "",  # ROADMAP #14：视频学习 VLM 提示词（空=内置），可按游戏覆盖
+    # ROADMAP #14：视频学习增强
+    "learn.hash_dedup": True,  # 抽帧后感知哈希跳过近重复帧，省 VLM 调用
+    "learn.hash_threshold": 5,  # 汉明距离 ≤ 该值视为近重复（64bit 哈希）
+    "learn.min_votes": 2,  # 同一战术需 ≥N 帧支持才入库（1=关闭投票）
     # ROADMAP #5：外部依赖统一降级链（重试次数 / 线性退避秒 / 超时）
     "resilience.perception.retries": 2,
     "resilience.perception.backoff": 1.0,
@@ -3041,6 +3046,11 @@ def auto_tuner_reset() -> str:
 # ===========================================================================
 # 12. 视频学习（抽帧 → VLM 提取战术 → 去重入库）
 # ===========================================================================
+def _vlm_prompt() -> str:
+    """VLM 提示词：档案/配置 llm.vlm_prompt 可覆盖（ROADMAP #14）。"""
+    return str(cfg_get("llm.vlm_prompt", "") or "").strip() or VLM_PROMPT
+
+
 VLM_PROMPT = (
     "你是游戏战术分析师。看图，用一句话总结一条可执行的战术，"
     "必须带上适用条件（例如「低血量时…」「被夹击时…」）。只输出这一句话。"
@@ -3127,7 +3137,7 @@ def vlm_extract_tactic(b64_img: str) -> str:
                     "role": "user",
                     "content": [
                         {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_img}"}},
-                        {"type": "text", "text": VLM_PROMPT},
+                        {"type": "text", "text": _vlm_prompt()},
                     ],
                 }
             ],
@@ -3181,15 +3191,185 @@ def _dedup_new(tactics: list, target_dir: str, ratio: float = 0.75) -> list:
     return out
 
 
+def _png_to_rgb(path: str):
+    """极简 PNG 解码（仅 8-bit RGB/RGBA、非隔行）：无 cv2 时的降级路径。
+
+    返回 (w, h, [(r,g,b), ...])；不支持的格式抛 ValueError。
+    """
+    import struct
+    import zlib
+
+    with open(path, "rb") as f:
+        data = f.read()
+    if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise ValueError("not a PNG")
+    pos = 8
+    idat = []
+    w = h = depth = ctype = None
+    while pos + 8 <= len(data):
+        (ln,) = struct.unpack(">I", data[pos : pos + 4])
+        tag = data[pos + 4 : pos + 8]
+        chunk = data[pos + 8 : pos + 8 + ln]
+        if tag == b"IHDR":
+            w, h, depth, ctype, _c, _f, interlace = struct.unpack(">IIBBBBB", chunk)
+            if depth != 8 or ctype not in (2, 6) or interlace != 0:
+                raise ValueError(f"unsupported PNG (depth={depth}, ctype={ctype})")
+        elif tag == b"IDAT":
+            idat.append(chunk)
+        elif tag == b"IEND":
+            break
+        pos += 12 + ln
+    if w is None or not idat:
+        raise ValueError("broken PNG")
+    raw = zlib.decompress(b"".join(idat))
+    bpp = 3 if ctype == 2 else 4
+    stride = w * bpp
+    out = bytearray()
+    prev = bytearray(stride)
+    p = 0
+    for _y in range(h):
+        ft = raw[p]
+        p += 1
+        line = bytearray(raw[p : p + stride])
+        p += stride
+        if ft == 1:
+            for i in range(bpp, stride):
+                line[i] = (line[i] + line[i - bpp]) & 0xFF
+        elif ft == 2:
+            for i in range(stride):
+                line[i] = (line[i] + prev[i]) & 0xFF
+        elif ft == 3:
+            for i in range(stride):
+                a = line[i - bpp] if i >= bpp else 0
+                line[i] = (line[i] + ((a + prev[i]) >> 1)) & 0xFF
+        elif ft == 4:
+            for i in range(stride):
+                a = line[i - bpp] if i >= bpp else 0
+                b = prev[i]
+                c = prev[i - bpp] if i >= bpp else 0
+                pp = a + b - c
+                pa, pb, pc = abs(pp - a), abs(pp - b), abs(pp - c)
+                pr = a if (pa <= pb and pa <= pc) else (b if pb <= pc else c)
+                line[i] = (line[i] + pr) & 0xFF
+        elif ft != 0:
+            raise ValueError(f"unknown filter {ft}")
+        out += line
+        prev = line
+    pixels = [(out[i], out[i + 1], out[i + 2]) for i in range(0, len(out) - bpp + 1, bpp)]
+    return w, h, pixels
+
+
+def _uniform_hash(gray_avg: float) -> int:
+    """纯色/近纯色图的退化哈希：直接编码平均灰度（重复 8 字节）。
+
+    8×8 平均哈希对无梯度图恒为 0，会把不同颜色判成重复；退化分支保证
+    「同色=距离0、异色=距离随灰度差增大」，合成帧与真实纯色场景都正确。
+    """
+    g = max(0, min(255, int(round(gray_avg))))
+    bits = 0
+    for i in range(8):
+        bits |= g << (i * 8)
+    return bits
+
+
+def _avg_hash(path: str):
+    """感知哈希（8×8 平均哈希 → 64bit）。cv2 优先，纯 Python PNG 解码兜底；
+    都不可用返回 None（调用方保守保留该帧）。"""
+    try:
+        import cv2
+
+        img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+        if img is not None:
+            small = cv2.resize(img, (8, 8), interpolation=cv2.INTER_AREA)
+            if float(small.max()) - float(small.min()) <= 1.0:
+                return _uniform_hash(float(small.mean()))
+            avg = float(small.mean())
+            bits = 0
+            for i, v in enumerate(small.flatten()):
+                if float(v) > avg:
+                    bits |= 1 << i
+            return bits
+    except Exception:
+        pass
+    try:
+        w, h, pixels = _png_to_rgb(path)
+    except (ValueError, OSError, EOFError):
+        return None
+    gray = [(r * 299 + g * 587 + b * 114) // 1000 for r, g, b in pixels]
+    small = []
+    for by in range(8):
+        y0, y1 = by * h // 8, max(by * h // 8 + 1, (by + 1) * h // 8)
+        for bx in range(8):
+            x0, x1 = bx * w // 8, max(bx * w // 8 + 1, (bx + 1) * w // 8)
+            vals = [gray[y * w + x] for y in range(y0, y1) for x in range(x0, x1)]
+            small.append(sum(vals) // max(1, len(vals)))
+    if max(small) - min(small) <= 1:
+        return _uniform_hash(sum(small) / len(small))
+    avg = sum(small) / len(small)
+    bits = 0
+    for i, v in enumerate(small):
+        if v > avg:
+            bits |= 1 << i
+    return bits
+
+
+def _hamming(a: int, b: int) -> int:
+    return bin(int(a) ^ int(b)).count("1")
+
+
+def _dedup_frames(paths: list) -> tuple:
+    """ROADMAP #14：感知哈希跳过近重复帧，省 VLM 调用。返回 (保留帧, 跳过数)。"""
+    if not bool(cfg_get("learn.hash_dedup", True)):
+        return list(paths), 0
+    threshold = safe_int(cfg_get("learn.hash_threshold", 5), 5)
+    kept, hashes, skipped = [], [], 0
+    for p in paths:
+        h = _avg_hash(p)
+        if h is None:  # 解码不了 → 保守保留
+            kept.append(p)
+            continue
+        if any(_hamming(h, k) <= threshold for k in hashes):
+            skipped += 1
+            continue
+        kept.append(p)
+        hashes.append(h)
+    return kept, skipped
+
+
+def _vote_tactics(tactics: list, min_votes: int = 2) -> list:
+    """ROADMAP #14：多帧投票。相似战术（ratio≥0.75）归组，票数达标才入库；
+    代表句取组内最长一条（信息量最大）。min_votes=1 等价于关闭投票。"""
+    groups = []  # [票数, 代表句]
+    for t in tactics:
+        t = str(t or "").strip()
+        if not _useful_tactic(t):
+            continue
+        placed = False
+        for g in groups:
+            if difflib.SequenceMatcher(None, t, g[1]).ratio() >= 0.75:
+                g[0] += 1
+                if len(t) > len(g[1]):
+                    g[1] = t
+                placed = True
+                break
+        if not placed:
+            groups.append([1, t])
+    need = max(1, safe_int(min_votes, 2))
+    return [g[1] for g in groups if g[0] >= need]
+
+
 def learn_from_video(
     video_path: str = None, frame_count: int = 5, skip: int = 25, cleanup: bool = True
 ) -> dict:
-    """一次完整学习：抽帧 → 逐帧 VLM → 去重 → 入库 → 清理临时帧。"""
+    """一次完整学习（ROADMAP #14）：抽帧 → 哈希跳重复 → 逐帧 VLM → 多帧投票
+    → 历史去重 → 入库 → 清理临时帧。"""
     frames = extract_frames(video_path, skip) if video_path else []
     mode = "真实抽帧" if frames else "合成帧(离线降级)"
     if not frames:
         frames = synthesize_frames(frame_count)
-    log(f"[学习] {mode}，共 {len(frames)} 帧，开始逐帧提取战术...")
+    total_frames = len(frames)
+    frames, dedup_skipped = _dedup_frames(frames)
+    log(f"[学习] {mode}，共 {total_frames} 帧（哈希去重跳过 {dedup_skipped}），开始逐帧提取战术...")
 
     tactics = []
     for fp in frames:
@@ -3200,24 +3380,40 @@ def learn_from_video(
             continue
         tactics.append(t)
 
+    min_votes = safe_int(cfg_get("learn.min_votes", 2), 2)
+    voted = _vote_tactics(tactics, min_votes)
     target = kb_game_dir(active_game())
     os.makedirs(target, exist_ok=True)
-    kept = _dedup_new(tactics, target)
+    kept = _dedup_new(voted, target)
     name = os.path.splitext(os.path.basename(video_path))[0] if video_path else "offline"
     fn = f"video_tactic_{safe_name(name)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
     content = (
         f"# 视频学习战术 — {video_path or '(离线合成)'}\n\n"
         f"> 学习时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-        f"> 提取帧数: {len(tactics)}，去重后 {len(kept)} 条\n\n## 战术列表\n\n"
-        + "".join(f"{i}. {t}\n" for i, t in enumerate(kept, 1))
+        f"> 提取帧数: {len(tactics)}（哈希去重跳过 {dedup_skipped}），"
+        f"投票(≥{min_votes}帧)后 {len(voted)} 条，历史去重后 {len(kept)} 条\n\n"
+        "## 战术列表\n\n" + "".join(f"{i}. {t}\n" for i, t in enumerate(kept, 1))
     )
     path = os.path.join(target, fn)
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
     if cleanup:
         shutil.rmtree(FRAME_DIR, ignore_errors=True)
-    log_event("learn", frames=len(tactics), kept=len(kept), file=path)
-    return {"frames": len(tactics), "kept": len(kept), "file": path}
+    log_event(
+        "learn",
+        frames=len(tactics),
+        dedup_skipped=dedup_skipped,
+        voted=len(voted),
+        kept=len(kept),
+        file=path,
+    )
+    return {
+        "frames": len(tactics),
+        "dedup_skipped": dedup_skipped,
+        "voted": len(voted),
+        "kept": len(kept),
+        "file": path,
+    }
 
 
 def download_video(url: str) -> str:

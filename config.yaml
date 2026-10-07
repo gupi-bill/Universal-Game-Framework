@@ -124,6 +124,12 @@ llm:
   system_prompt: ""            # 空=内置提示词；可按游戏覆盖决策人设与输出约束
   max_tokens: 800              # 单次决策输出上限
   temperature: 0.3             # 决策要稳，低温
+  vlm_prompt: ""               # 视频学习 VLM 提示词，空=内置（ROADMAP #14）
+
+learn:
+  hash_dedup: true             # 抽帧后感知哈希跳过近重复帧，省 VLM 调用（ROADMAP #14）
+  hash_threshold: 5            # 64bit 哈希汉明距离 ≤ 该值视为近重复
+  min_votes: 2                 # 同一战术需 ≥N 帧支持才入库（1=关闭投票）
 
 # ROADMAP #5：外部依赖统一降级链——失败重试 N 次（线性退避），仍失败才降级并留日志
 resilience:
