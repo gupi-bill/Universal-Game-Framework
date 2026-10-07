@@ -148,6 +148,7 @@ Universal-Game-Framework/
 ├── config.yaml           # 全局配置（阈值 / 路径，可热加载）
 ├── game_profiles/        # 游戏档案：florr / demo_arcade / space_invaders
 ├── tests/                # 精简测试
+├── ROADMAP.md            # 优化路线图（26 项技术优化清单）
 ├── requirements.txt      # 依赖（核心只有 pyyaml + requests）
 ├── pyproject.toml
 ├── Dockerfile
