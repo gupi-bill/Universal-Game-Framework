@@ -343,3 +343,31 @@ def test_replay_timeline(tmp_path, monkeypatch, capsys):
     out = agent.replay()
     assert "对局回放" in out and "R1" in out and "☠" in out and "🏁" in out
     assert agent.main(["replay", "--tail", "2"]) == 0
+
+
+# ---------------------------------------------------------------------------
+# v2#14 config-check
+# ---------------------------------------------------------------------------
+def test_config_check_clean_repo():
+    assert agent.main(["config-check"]) == 0
+
+
+def test_config_check_catches_bad_tuned(tmp_path, monkeypatch, capsys):
+    bad = tmp_path / "tuned.yaml"
+    bad.write_text(
+        'combat:\n  retreat_ratio: 99\n  typo_key: 1\npredictor:\n  confidence_threshold: "很高"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(agent, "TUNED_PATH", str(bad))
+    assert agent.main(["config-check"]) == 1
+    out = capsys.readouterr().out
+    assert "超出安全区间" in out and "类型应为" in out and "未知键" in out
+
+
+def test_config_check_multilevel_namespace(tmp_path, monkeypatch):
+    """多级嵌套（resilience.perception.retries）不得误报未知键。"""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("resilience:\n  perception:\n    retries: 3\n", encoding="utf-8")
+    monkeypatch.setattr(agent, "CONFIG_PATH", str(cfg))
+    monkeypatch.setattr(agent, "TUNED_PATH", str(tmp_path / "none.yaml"))
+    assert agent.main(["config-check"]) == 0

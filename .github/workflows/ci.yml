@@ -52,6 +52,9 @@ jobs:
       - name: 游戏档案校验（ROADMAP #10）
         run: python agent.py profile-check --all
 
+      - name: 配置体检（ROADMAP v2 #14）
+        run: python agent.py config-check
+
       - name: 分片构建一致性（ROADMAP #2）
         run: python build.py check-agent
 

@@ -328,6 +328,7 @@ DEFAULT = {
     "game.name": "florr",
     "game.description": "",
     "server.perception_port": 5001,  # http 感知后端端口
+    "server.panel_port": 5002,  # 监控面板默认端口（ROADMAP v2 #14 收编进 DEFAULT）
     "perception.backend": "auto",  # auto | http | mock | local | template（ROADMAP #6）
     "perception.http_url": "",  # 留空则用 http://127.0.0.1:<port>/perceive
     "perception.timeout": 24,  # 首帧要加载 YOLO，给足时间
@@ -1191,7 +1192,7 @@ def _threat_table() -> dict:
 
 
 def classify_by_rarity(rarity: str) -> str:
-    r = (rarity or "").strip().capitalize()
+    r = str(rarity or "").strip().capitalize()  # str() 兜底：脏数据(int等)不崩（fuzz #v2-15）
     if r in set(cfg_get("predictor.rarity_highest_boss", [])):
         return "highest_boss"
     if r in set(cfg_get("predictor.rarity_boss", [])):
@@ -1210,7 +1211,7 @@ PLAYER_ALLY_MARKERS = ("player_ally", "ally", "teammate", "friend", "party")
 def detect_role(raw_id: str, explicit: str | None = None) -> str:
     if explicit in ("player_enemy", "player_ally", "monster"):
         return explicit
-    rid = (raw_id or "").lower()
+    rid = str(raw_id or "").lower()  # str() 兜底：raw_id 为脏类型时不崩
     if any(m in rid for m in PLAYER_ENEMY_MARKERS):
         return "player_enemy"
     if any(m in rid for m in PLAYER_ALLY_MARKERS):
@@ -1615,6 +1616,7 @@ class Predictor:
                         "vy_per_sec": 0,
                         "confidence": 0.0,
                         "prediction_trusted": False,
+                        "model": "none",
                     }
                 )
         out.sort(key=lambda e: e["threat_score"], reverse=True)
@@ -4240,6 +4242,113 @@ def runtime_mode_text() -> str:
     )
 
 
+# 有明确安全区间的配置键（越界=ERROR）；与调参钳制区间/端口规范保持一致
+CONFIG_RANGES = {
+    "combat.retreat_ratio": (0.5, 1.5),
+    "predictor.confidence_threshold": (0.30, 0.90),
+    "server.perception_port": (1024, 65535),
+    "server.panel_port": (1024, 65535),
+    "predictor.predict_seconds": (0.05, 10.0),
+    "predictor.min_frames": (1, 30),
+    "predictor.history_maxlen": (3, 200),
+    "predictor.entity_timeout": (0.05, 10.0),
+    "predictor.accel_max": (1.0, 100000.0),
+    "agent.loop_interval": (0.0, 120.0),
+    "agent.death_frame_threshold": (1, 1000),
+    "agent.kb_max_mb": (1, 100000),
+    "agent.checkpoint_interval": (0, 100000),
+    "logs.retention_days": (0, 3650),
+    "logs.max_size_mb": (1, 100000),
+    "kb.search_top_n": (1, 100),
+    "kb.history_revisions": (1, 1000),
+    "learn.min_votes": (1, 100),
+    "resilience.perception.retries": (0, 20),
+    "resilience.webhook.retries": (0, 20),
+    "resilience.llm.retries": (0, 20),
+}
+
+
+def _flatten_raw(d: dict, pre: str = "") -> dict:
+    """把原始 YAML 树拍平成点分键；DEFAULT 中 dict 值的键视为终端（如 predictor.threat）。"""
+    namespaces = set()
+    for k in DEFAULT:
+        parts = k.split(".")
+        for i in range(1, len(parts)):
+            namespaces.add(".".join(parts[:i]))
+    dict_valued = {k for k, v in DEFAULT.items() if isinstance(v, dict)}
+    out: dict = {}
+    for k, v in d.items():
+        key = f"{pre}{k}"
+        if str(key).startswith("_"):
+            continue  # _cooldown/_audit 等内部键跳过
+        if isinstance(v, dict) and key in namespaces and key not in dict_valued:
+            out.update(_flatten_raw(v, key + "."))
+        else:
+            out[key] = v
+    return out
+
+
+def _type_ok(actual, expect) -> bool:
+    if expect is None:
+        return True  # None 默认值 = 任意类型（如 capture_region/player_stub）
+    if isinstance(expect, bool):
+        return isinstance(actual, bool)
+    if isinstance(expect, (int, float)):
+        return isinstance(actual, (int, float)) and not isinstance(actual, bool)
+    if isinstance(expect, str):
+        return isinstance(actual, str)
+    if isinstance(expect, list):
+        return isinstance(actual, list)
+    if isinstance(expect, dict):
+        return isinstance(actual, dict)
+    return True
+
+
+def config_check() -> int:
+    """ROADMAP v2 #14：config.yaml / tuned_overrides.yaml 体检。
+
+    未知键 WARN（大概率拼写错误，运行时会被静默忽略）；类型不符 ERROR；
+    有安全区间的键越界 ERROR。返回退出码（0=通过）。
+    """
+    issues: list = []
+    known = set(DEFAULT)
+    files = [("config.yaml", CONFIG_PATH), ("tuned_overrides.yaml", TUNED_PATH)]
+    for label, path in files:
+        if not os.path.exists(path):
+            if label == "config.yaml":
+                issues.append(("WARN", label, "文件不存在（将只用内置默认值）"))
+            continue
+        raw = _read_yaml(path)
+        if not raw:
+            issues.append(("ERROR", label, "无法解析为 YAML 字典"))
+            continue
+        for key, val in _flatten_raw(raw).items():
+            if key not in known:
+                issues.append(("WARN", f"{label}:{key}", "未知键（不会被读取，疑似拼写错误）"))
+                continue
+            if not _type_ok(val, DEFAULT[key]):
+                issues.append(
+                    (
+                        "ERROR",
+                        f"{label}:{key}",
+                        f"类型应为 {type(DEFAULT[key]).__name__}，实际 {type(val).__name__}",
+                    )
+                )
+                continue
+            rng = CONFIG_RANGES.get(key)
+            if rng and isinstance(val, (int, float)) and not isinstance(val, bool):
+                lo, hi = rng
+                if not lo <= val <= hi:
+                    issues.append(("ERROR", f"{label}:{key}", f"超出安全区间 [{lo}, {hi}]：{val}"))
+    errors = [i for i in issues if i[0] == "ERROR"]
+    warns = [i for i in issues if i[0] == "WARN"]
+    status = "✗ FAIL" if errors else ("⚠ PASS(有警告)" if warns else "✓ PASS")
+    print(f"[{status}] 配置体检 —— {len(errors)} 错误 / {len(warns)} 警告")
+    for level, key, msg in issues:
+        print(f"    {level}: {key}: {msg}")
+    return 1 if errors else 0
+
+
 # ===========================================================================
 # 15a. 游戏档案校验（profile-check）
 # ===========================================================================
@@ -4940,6 +5049,7 @@ GUIDE = """# Universal-Game-Framework · 单文件游戏 Agent 使用手册
     learn    视频学习：learn video.mp4 或 learn --url <链接> --frames 5
     report   生成一份对局报告（写 run_logs/，可选 Webhook）
     doctor   环境体检：依赖/目录/档案/感知/密钥，✓⚠✗ 清单（致命项退出码 1）
+    config-check  体检 config.yaml / tuned_overrides.yaml（未知键/类型/安全区间）
     bench    性能基准：--rounds N，分段计时 感知/预判/评估/决策/动作
     panel    本地监控面板（纯标准库，只读快照/事件/日志，Ctrl+C 停止）
     logs     查看运行日志：--tail N / --grep KW / --events --kind decision / --stats
@@ -5105,7 +5215,13 @@ def build_parser() -> argparse.ArgumentParser:
         "  python agent.py selftest\n  python agent.py guide",
     )
     # dest 与子命令位置参数 game 区分开：--game 是全局切换，位置参数只作用于该子命令
-    ap.add_argument("--game", default="", dest="game_opt", help="指定游戏名（读 game_profiles/<名字>.yaml）")
+    ap.add_argument(
+        "--game",
+        default="",
+        dest="game_opt",
+        metavar="NAME",
+        help="指定游戏名（读 game_profiles/<名字>.yaml）",
+    )
     ap.add_argument("--version", action="store_true", help="打印版本号并退出")
     sub = ap.add_subparsers(dest="cmd")
 
@@ -5207,6 +5323,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("replay", help="对局回放：事件时间线（ROADMAP v2 #12）")
     sp.add_argument("--tail", type=int, default=0, help="只看最后 N 条事件")
+
+    sub.add_parser("config-check", help="体检 config.yaml / tuned_overrides.yaml（ROADMAP v2 #14）")
     return ap
 
 
@@ -5268,6 +5386,8 @@ def main(argv=None) -> int:
         return brief(args.game)
     elif cmd == "replay":
         print(replay(args.tail))
+    elif cmd == "config-check":
+        return config_check()
     elif cmd == "tune":
         if args.reset:
             print(auto_tuner_reset())
