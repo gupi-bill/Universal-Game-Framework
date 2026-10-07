@@ -74,6 +74,13 @@ agent:
   report_every: 0              # v1.7 局中定时汇报间隔(轮数，0=关闭；>0 则每 N 轮上报一次进度)
   tune_locked: []              # 人工锁定的参数（如 [combat.retreat_ratio]），调参跳过（ROADMAP #13）
 
+# ROADMAP #15：死亡复盘触发与模板（可按游戏档案覆盖）
+review:
+  enabled: true                # 复盘总开关
+  trigger_boss: true           # BOSS 局（稀有度档取自 predictor.rarity_boss/highest_boss）
+  trigger_team: true           # 组队局
+  template: ""                 # 自定义模板，占位符 {ts}{outcome}{monster}{set}{cause}{note}；空=内置
+
 paths:
   knowledge_md: knowledge_md   # 知识库目录
   frames: video_frames         # 视频抽帧临时目录

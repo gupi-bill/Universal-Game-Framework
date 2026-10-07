@@ -153,3 +153,71 @@ def test_tune_lock_skips_param(tmp_path, monkeypatch):
     assert (o.get("predictor") or {}).get("confidence_threshold") is not None
     assert any(a["param"] == "predictor.confidence_threshold" for a in (o.get("_audit") or []))
     assert "人工锁定" in agent.auto_tuner_status()
+
+
+# ---------------------------------------------------------------------------
+# #15 复盘可配置
+# ---------------------------------------------------------------------------
+def test_review_disabled_by_config(monkeypatch):
+    monkeypatch.setattr(agent, "_CFG", {"review": {"enabled": False}})
+    state = {"entities": [{"rarity": "Super"}], "teammates": [{"n": 1}]}
+    assert agent.should_review(state) is False
+
+
+def test_review_triggers_configurable(monkeypatch):
+    monkeypatch.setattr(
+        agent,
+        "_CFG",
+        {
+            "review": {"enabled": True, "trigger_boss": False, "trigger_team": True},
+            "predictor": {"rarity_boss": ["Super"], "rarity_highest_boss": ["Unique"]},
+        },
+    )
+    assert agent.should_review({"entities": [{"rarity": "Super"}], "teammates": []}) is False
+    assert agent.should_review({"entities": [], "teammates": [{"name": "a"}]}) is True
+
+
+def test_review_boss_rarity_from_profile(monkeypatch):
+    """稀有度档来自档案而非硬编码：自定义档位名也认。"""
+    monkeypatch.setattr(
+        agent,
+        "_CFG",
+        {
+            "review": {"enabled": True, "trigger_boss": True, "trigger_team": True},
+            "predictor": {"rarity_boss": ["Mothership"], "rarity_highest_boss": []},
+        },
+    )
+    assert agent.should_review({"entities": [{"rarity": "mothership"}], "teammates": []}) is True
+    assert agent.should_review({"entities": [{"rarity": "Super"}], "teammates": []}) is False
+
+
+def test_review_custom_template_and_structured_fields(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent, "KB_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        agent,
+        "_CFG",
+        {
+            "review": {
+                "enabled": True,
+                "trigger_boss": True,
+                "trigger_team": True,
+                "template": "自定义复盘 {outcome} 套装={set}",
+            },
+            "kb": {"search_top_n": 5, "history_revisions": 5, "history_max_kb": 256},
+            "predictor": {"rarity_boss": ["Super"], "rarity_highest_boss": []},
+        },
+    )
+    state = {
+        "player": {"petal_set": "tank"},
+        "entities": [{"raw_id": "m", "rarity": "Super"}],
+        "teammates": [],
+    }
+    msg = agent.review_round(False, "测试", state)
+    assert "已写入知识库" in msg
+    gdir = tmp_path / agent.active_game()
+    files = sorted(gdir.glob("review_*.md"))
+    assert files
+    with open(files[-1], encoding="utf-8") as f:
+        c = f.read()
+    assert c.startswith("自定义复盘 死亡 套装=tank")
+    assert "## 结构化字段" in c and "killer_entities:" in c

@@ -303,6 +303,10 @@ DEFAULT = {
     "agent.kb_archive_dir": "knowledge_archive",
     "agent.corner_pause": True,  # 鼠标移到屏幕角落 = 安全暂停
     "agent.tune_locked": [],  # ROADMAP #13：人工锁定的参数（点分路径），调参跳过
+    "review.enabled": True,  # ROADMAP #15：复盘总开关
+    "review.trigger_boss": True,  # BOSS 局触发复盘
+    "review.trigger_team": True,  # 组队局触发复盘
+    "review.template": "",  # 自定义复盘模板（占位符 ts/outcome/monster/set/cause/note），空=内置
     "paths.knowledge_md": "knowledge_md",
     "paths.frames": "video_frames",
     "paths.run_logs": "run_logs",
@@ -2069,18 +2073,39 @@ def _read_json(path: str, default):
 # 9. 复盘 & BOSS 记忆
 # ===========================================================================
 def should_review(state: dict) -> bool:
-    """只有 highest_boss / boss / 组队局才生成复盘（普通小怪局不写，省硬盘）。"""
+    """复盘触发判定（ROADMAP #15）：开关与触发条件全部下放配置/游戏档案。
+
+    - review.enabled=false 时全关
+    - trigger_boss 按档案声明的 boss / highest_boss 稀有度档判定（不再硬编码）
+    - trigger_team 控制组队局是否复盘
+    """
+    if not bool(cfg_get("review.enabled", True)):
+        return False
+    boss_rarities = {str(r).capitalize() for r in (cfg_get("predictor.rarity_boss", []) or [])}
+    boss_rarities |= {str(r).capitalize() for r in (cfg_get("predictor.rarity_highest_boss", []) or [])}
+    if not boss_rarities:
+        boss_rarities = {"Super", "Unique", "Eternal"}
     ents = state.get("entities") or []
     has_boss = any(
-        e.get("rarity", "").capitalize() in ("Super", "Unique", "Eternal")
-        for e in ents
-        if isinstance(e, dict)
+        str(e.get("rarity", "")).capitalize() in boss_rarities for e in ents if isinstance(e, dict)
     )
-    return has_boss or bool(state.get("teammates"))
+    if has_boss and bool(cfg_get("review.trigger_boss", True)):
+        return True
+    return bool(state.get("teammates")) and bool(cfg_get("review.trigger_team", True))
+
+
+DEFAULT_REVIEW_TEMPLATE = (
+    "# 对局复盘 — {ts}\n\n"
+    "- 结果: {outcome}\n"
+    "- 面对怪物: {monster}\n"
+    "- 自身套装: {set}\n"
+    "- 死亡原因: {cause}\n"
+    "- 可改进点: {note}\n"
+)
 
 
 def review_round(survived: bool, note: str, state: dict) -> str:
-    """生成统一模板复盘并写入知识库。"""
+    """生成复盘并写入知识库（ROADMAP #15：模板可配置 + 结构化字段便于死因统计）。"""
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     outcome = "存活" if survived else "死亡"
     player = state.get("player") if isinstance(state.get("player"), dict) else {}
@@ -2088,9 +2113,26 @@ def review_round(survived: bool, note: str, state: dict) -> str:
     ents = [e for e in (state.get("entities") or []) if isinstance(e, dict)]
     monster = "、".join(f"{e.get('raw_id', '?')}({e.get('rarity', '?')})" for e in ents[:5]) or "未知"
     cause = note if survived else f"死亡。当时面对怪物: {monster}，自身套装: {set_info}"
-    content = (
-        f"# 对局复盘 — {ts}\n\n- 结果: {outcome}\n- 面对怪物: {monster}\n"
-        f"- 自身套装: {set_info}\n- 死亡原因: {cause}\n- 可改进点: {note}\n"
+    fmt = {
+        "ts": ts,
+        "outcome": outcome,
+        "monster": monster,
+        "set": set_info,
+        "cause": cause,
+        "note": note,
+    }
+    template = str(cfg_get("review.template", "") or "").strip() or DEFAULT_REVIEW_TEMPLATE
+    try:
+        content = template.format(**fmt)
+    except (KeyError, IndexError, ValueError):
+        log("[复盘] 自定义模板占位符有误，回落内置模板")
+        content = DEFAULT_REVIEW_TEMPLATE.format(**fmt)
+    content += (
+        "\n## 结构化字段\n"
+        f"- outcome: {outcome}\n"
+        f"- killer_entities: {monster}\n"
+        f"- set: {set_info}\n"
+        f"- ts: {ts}\n"
     )
     hist = kb_search("对局复盘", game=active_game())
     content += "\n## 与历史对局对比\n"
