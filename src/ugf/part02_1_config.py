@@ -97,6 +97,7 @@ DEFAULT = {
     "logs.max_size_mb": 20,
     # ROADMAP #8：LLM 决策（prompt 可由游戏档案覆盖；空=内置 SYSTEM_PROMPT）
     "llm.use_ai": True,  # true=调LLM API决策; false=纯本地规则(离线免费)
+    "llm.confidence_threshold": 0.6,  # 本地模型置信度低于此值自动切云端兜底
     "llm.system_prompt": "",
     "llm.max_tokens": 800,
     "llm.temperature": 0.3,

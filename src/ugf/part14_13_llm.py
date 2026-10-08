@@ -115,7 +115,7 @@ except Exception:
 
 
 def llm_decide(state: FramePayload, predictions: list, combat_eval: dict, kb_text: str) -> ActionDict:
-    """LLM 决策：本地 Ollama 优先，F8 可切云端/离线。"""
+    """LLM 决策：本地 Laya 优先，置信度低自动切云端，F8 可手动切换。"""
     if not cfg_get("llm.use_ai", True):
         return fallback_decide(state, combat_eval, kb_text)
     url, key, model = _resolve_llm_endpoint()
@@ -126,6 +126,9 @@ def llm_decide(state: FramePayload, predictions: list, combat_eval: dict, kb_tex
     except ImportError:
         log("[LLM] 未安装 requests，走规则兜底")
         return fallback_decide(state, combat_eval, kb_text)
+
+    is_local = "127.0.0.1:11434" in url
+    threshold = safe_float(cfg_get("llm.confidence_threshold", 0.6), 0.6)
 
     system_prompt = str(cfg_get("llm.system_prompt", "") or "").strip() or SYSTEM_PROMPT
     user_content = (
@@ -142,16 +145,16 @@ def llm_decide(state: FramePayload, predictions: list, combat_eval: dict, kb_tex
     backoff = safe_float(cfg_get("resilience.llm.backoff", 0.5), 0.5)
     timeout = safe_float(cfg_get("resilience.llm.timeout", 15), 15)
 
-    def _call(msgs):
+    def _call(msgs, call_url=None, call_key=None, call_model=None):
         payload: dict = {
-            "model": model or os.getenv("LLM_MODEL", ""),
+            "model": call_model or model or os.getenv("LLM_MODEL", ""),
             "messages": msgs,
             "max_tokens": safe_int(cfg_get("llm.max_tokens", 800), 800),
             "temperature": safe_float(cfg_get("llm.temperature", 0.3), 0.3),
         }
         r = requests.post(
-            url,
-            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            call_url or url,
+            headers={"Authorization": f"Bearer {call_key or key}", "Content-Type": "application/json"},
             json=payload,
             timeout=timeout,
         )
@@ -163,33 +166,57 @@ def llm_decide(state: FramePayload, predictions: list, combat_eval: dict, kb_tex
         log(f"[LLM] 请求失败，改用规则兜底: {err}")
         return fallback_decide(state, combat_eval, kb_text)
 
+    # 解析动作
+    action = None
     for attempt in (1, 2):
         try:
             action, verr = _validate_action(_llm_extract_json(content))
         except (ValueError, KeyError, IndexError, TypeError) as e:
             action, verr = None, f"无法解析 JSON: {type(e).__name__}"
         if action is not None:
-            return action
+            break
         log(f"[LLM] 输出不合法(第 {attempt} 次): {verr}")
         if attempt == 1:
             repair = messages + [
                 {"role": "assistant", "content": str(content)},
-                {
-                    "role": "user",
-                    "content": (
-                        f"你上次的输出不合法：{verr}。"
-                        "只输出一个合法的动作 JSON，不要输出其他内容。"
-                        '示例：{"action":"attack"} 或 {"action":"move","x":100,"y":200}'
-                    ),
-                },
+                {"role": "user", "content": (
+                    f"你上次的输出不合法：{verr}。"
+                    "只输出一个合法的动作 JSON，不要输出其他内容。"
+                )},
             ]
             ok2, content2, err2 = retry_call(lambda _m=repair: _call(_m), 1, 0.0, "LLM 修复重试")
             if not ok2:
-                log(f"[LLM] 修复重试请求失败: {err2}")
                 break
             content = content2
-    log("[LLM] 修复后仍不合法，改用规则兜底")
-    return fallback_decide(state, combat_eval, kb_text)
+
+    if action is None:
+        log("[LLM] 修复后仍不合法，改用规则兜底")
+        return fallback_decide(state, combat_eval, kb_text)
+
+    # 置信度兜底：本地模型返回的动作如果带 confidence 字段且低于阈值，切云端
+    if is_local:
+        conf = safe_float(action.get("confidence", 1.0), 1.0)
+        if conf < threshold:
+            log(f"[LLM] 本地模型置信度 {conf:.2f} < {threshold}，切云端兜底")
+            cloud_url = (os.getenv("LLM_API_URL") or "").strip()
+            cloud_key = (os.getenv("LLM_API_KEY") or "").strip()
+            cloud_model = os.getenv("LLM_MODEL", "")
+            if cloud_url and cloud_key:
+                try:
+                    ok3, c3, _ = retry_call(
+                        lambda: _call(messages, cloud_url, cloud_key, cloud_model),
+                        1, 0.0, "云端兜底",
+                    )
+                    if ok3:
+                        a2, _ = _validate_action(_llm_extract_json(c3))
+                        if a2 is not None:
+                            a2["source"] = "llm_cloud"
+                            return a2
+                except Exception as e:
+                    log(f"[LLM] 云端兜底失败: {type(e).__name__}")
+
+    action["source"] = "llm_local" if is_local else "llm"
+    return action
 
 
 def fallback_decide(state: FramePayload, combat_eval: dict, kb_text: str = "") -> ActionDict:
