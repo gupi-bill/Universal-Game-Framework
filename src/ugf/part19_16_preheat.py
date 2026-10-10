@@ -18,7 +18,7 @@ def _preheat_cache_dir() -> str:
     d = str(cfg_get("preheat.cache_dir", "") or "").strip()
     if d:
         return d
-    return os.path.join(UGF_HOME, "preheat_cache")
+    return os.path.join(BASE_DIR, "preheat_cache")
 
 
 # ---------------------------------------------------------------------------
@@ -132,7 +132,7 @@ def _train_lora(samples: list, game: str, target: str) -> str:
     except ImportError:
         log("[预热] 未装 torch/peft/transformers，样本已存知识库（跳过实训练）")
         # 降级：把样本写进知识库 MD
-        kb_dir = os.path.join(UGF_HOME, "kb")
+        kb_dir = os.path.join(BASE_DIR, "kb")
         os.makedirs(kb_dir, exist_ok=True)
         md = os.path.join(kb_dir, f"preheat_{key}.md")
         with open(md, "w", encoding="utf-8") as f:
