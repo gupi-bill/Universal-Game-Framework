@@ -155,6 +155,7 @@ def preheat(game: str, target: str) -> dict:
     """启动任务前的预热：查攻略 → 清洗 → 现场 LoRA。
 
     返回 {"samples": N, "adapter": path|""}
+    同一 game:target 第二次跑直接命中缓存，不重复联网/训练。
     """
     if not cfg_get("preheat.enable", True):
         log("[预热] preheat.enable=false，跳过")
@@ -163,6 +164,24 @@ def preheat(game: str, target: str) -> dict:
     t0 = time.time()
     max_sec = safe_int(cfg_get("preheat.max_seconds", 180), 180)
     max_samples = safe_int(cfg_get("preheat.max_samples", 200), 200)
+
+    # 缓存命中检查
+    import json as _json
+    cache_dir = _preheat_cache_dir()
+    os.makedirs(cache_dir, exist_ok=True)
+    key = hashlib.md5(f"{game}:{target}".encode()).hexdigest()[:12]
+    samples_file = os.path.join(cache_dir, f"samples_{key}.json")
+    adapter_dir = os.path.join(cache_dir, f"lora_{key}")
+    if os.path.exists(samples_file):
+        try:
+            with open(samples_file, encoding="utf-8") as f:
+                cached = _json.load(f)
+            n = len(cached) if isinstance(cached, list) else 0
+            adapter = adapter_dir if os.path.isdir(adapter_dir) else ""
+            log(f"[预热] 缓存命中（{game}:{target}），{n} 条样本，跳过联网")
+            return {"samples": n, "adapter": adapter, "cached": True}
+        except Exception:
+            pass  # 缓存损坏就重新来
 
     log(f"[预热] 开始检索 {game} - {target}（上限 {max_sec}s）")
 
