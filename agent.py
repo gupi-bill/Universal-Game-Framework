@@ -3944,7 +3944,48 @@ def _validate_action(obj) -> tuple[ActionDict | None, str]:
     return out, ""
 
 
-_llm_mode_override = None  # None=自动, "local"/"cloud"=手动切换
+_llm_mode_override = None  # None=自动, "local"/"cloud"/"laya_native"=手动切换
+_laya_native_model = None  # 缓存 laya 原生模型实例
+
+
+def _try_laya_native():
+    """v3.0-3: 尝试加载 laya 原生 SDK（pip install laya，直连 HF 权重，绕开 Ollama）。"""
+    global _laya_native_model
+    if _laya_native_model is not None:
+        return _laya_native_model
+    try:
+        from laya import Laya  # type: ignore
+        _laya_native_model = Laya.load("convaiinnovations/laya")
+        log("[Laya] 原生 SDK 加载成功（直连 HF 权重）")
+        return _laya_native_model
+    except ImportError:
+        return None
+    except Exception as e:
+        log(f"[Laya] 原生加载失败（回退 Ollama/云端）: {type(e).__name__}")
+        return None
+
+
+def _laya_native_decide(state, predictions, combat_eval, kb_text):
+    """用 laya 原生 SDK 对候选动作打分，返回 (action_dict, confidence)。"""
+    model = _try_laya_native()
+    if model is None:
+        return None, 0.0
+    # 候选动作
+    choices = ["attack", "defend", "move", "idle", "synthesize"]
+    context = (
+        f"HP={state.get('player',{}).get('hp',100)} "
+        f"enemies={len(state.get('entities',[]))} "
+        f"decision={combat_eval.get('decision','fight')}"
+    )
+    try:
+        result = model.choose(context=context, choices=choices)
+        best = result.get("choice", "idle")
+        conf = float(result.get("probability", 0.5))
+        action = {"action": best, "source": "laya_native", "confidence": conf}
+        return action, conf
+    except Exception as e:
+        log(f"[Laya] 原生推理失败: {type(e).__name__}")
+        return None, 0.0
 
 
 def _resolve_llm_endpoint():
@@ -4007,9 +4048,19 @@ except Exception:
 
 
 def llm_decide(state: FramePayload, predictions: list, combat_eval: dict, kb_text: str) -> ActionDict:
-    """LLM 决策：本地 Laya 优先，置信度低自动切云端，F8 可手动切换。"""
+    """LLM 决策：Laya 原生 SDK 优先 → Ollama → 云端，置信度低自动兜底。"""
     if not cfg_get("llm.use_ai", True):
         return fallback_decide(state, combat_eval, kb_text)
+
+    # v3.0-3: 先试 laya 原生 SDK（最优先，最快）
+    if _llm_mode_override != "cloud":
+        action, conf = _laya_native_decide(state, predictions, combat_eval, kb_text)
+        if action is not None:
+            threshold = safe_float(cfg_get("llm.confidence_threshold", 0.6), 0.6)
+            if conf >= threshold:
+                return action
+            log(f"[Laya] 置信度 {conf:.2f} < {threshold}，升级到 Ollama/云端")
+
     url, key, model = _resolve_llm_endpoint()
     if not url:
         return fallback_decide(state, combat_eval, kb_text)
