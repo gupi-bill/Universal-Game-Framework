@@ -68,6 +68,15 @@ def run_agent(
     seeded = seed_knowledge(game)
     if seeded:
         log(f"[知识] 已补种 {len(seeded)} 份 seed 知识到 knowledge_md/{game}/")
+
+    # v3.0 自动预热：开跑前自动查攻略+现场LoRA（可在 config 关）
+    if cfg_get("preheat.enable", True) and not dry_run():
+        log("[预热] 启动自动预热...")
+        try:
+            ph = preheat(game, cfg_get("combat.default_set", "general"))
+            log(f"[预热] 完成：{ph['samples']} 条样本，adapter={ph.get('adapter') or '无'}")
+        except Exception as e:
+            log(f"[预热] 异常（已跳过）: {type(e).__name__}: {e}")
     info = resume_info()
     resumable = session_record_start(game)
     if resumable and info:
