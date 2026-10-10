@@ -110,6 +110,41 @@ def write_boss_memory(observations: list, samples: dict) -> str:
     return kb_append("boss_behavior_log", content)
 
 
+def auto_lesson(survived: bool, state: FramePayload, combat_eval: dict) -> str:
+    """v4.0: 死亡后自动写教训进知识库，下次同类局面自动避坑。"""
+    if survived:
+        return ""
+    ents = [e for e in (state.get("entities") or []) if isinstance(e, dict)]
+    if not ents:
+        return ""
+    # 找出致命怪物
+    killers = [e for e in ents if e.get("rarity", "") in ("Super", "Unique", "Eternal", "Mythic")]
+    target = killers[0] if killers else ents[0]
+    monster = target.get("raw_id", "未知怪物")
+    rarity = target.get("rarity", "Common")
+    decision = combat_eval.get("decision", "?")
+    lesson = (
+        f"# 自动教训: {monster}({rarity}) 击杀了我\n\n"
+        f"- 当时决策: {decision}\n"
+        f"- 教训: 面对 {rarity} 级 {monster}，不要 {decision}，应撤退/换套\n"
+        f"- 下次遇到同类: 优先 retreat 套装，保持距离\n"
+    )
+    kb_write(f"lesson_{monster}_{int(time.time())}", lesson, game=active_game())
+    return f"[自学] 已记录教训: {monster}({rarity})"
+
+
+def auto_difficulty(deaths: int, rounds: int) -> str:
+    """v4.0: 根据死亡率自动调整难度策略（写日志，调参模块后续接管）。"""
+    if rounds < 10:
+        return ""
+    rate = deaths / rounds
+    if rate > 0.3:
+        return f"[自适应] 死亡率 {rate:.0%} > 30%，建议降低进攻性、多用 retreat 套"
+    elif rate < 0.05 and rounds > 50:
+        return f"[自适应] 死亡率 {rate:.0%} < 5%，可提高进攻性、主动追怪"
+    return ""
+
+
 def write_snapshot(
     rounds: int,
     deaths: int,

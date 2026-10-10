@@ -171,6 +171,14 @@ def run_agent(
                     else:
                         log("[复盘] 普通小怪局，不生成复盘（省硬盘）")
                         PREDICTOR.reset()
+                    # v4.0: 死亡自动写教训
+                    lesson = auto_lesson(False, state, evaluator.evaluate(state, PREDICTOR.all_entities()))
+                    if lesson:
+                        log(lesson)
+                    # v4.0: 自适应难度提示
+                    diff = auto_difficulty(deaths, rounds)
+                    if diff:
+                        log(diff)
                     death_streak = 0
                     evaluator.invalidate()
                     time.sleep(2)
