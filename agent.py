@@ -500,17 +500,54 @@ def active_game() -> str:
     return str((_CFG.get("agent") or {}).get("game") or (_CFG.get("game") or {}).get("name") or "florr")
 
 
+def _auto_create_profile(game: str, path: str) -> None:
+    """v3.0-2: 陌生游戏自动生成通用 2D 档案。"""
+    os.makedirs(PROFILE_DIR, exist_ok=True)
+    default = (
+        f"# 自动生成的游戏档案（{game}）\n"
+        f"# v3.0: 首次检测到陌生游戏时创建，可手动调整\n"
+        f"extends: florr\n\n"
+        f"game:\n"
+        f"  name: {game}\n"
+        f"  type: 2d\n\n"
+        f"combat:\n"
+        f"  default_set: combat\n"
+        f"  sets:\n"
+        f"    - combat\n"
+        f"    - tank\n"
+        f"    - retreat\n"
+        f"    - chase\n\n"
+        f"perception:\n"
+        f"  backend: vlm\n"
+    )
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(default)
+        log(f"[档案] 自动创建通用档案: {path}")
+    except OSError as e:
+        log(f"[档案] 自动创建失败: {e}")
+
+
 def _load_profile_chain(game: str, depth: int = 0) -> dict:
     """读取游戏档案，支持 extends 继承（ROADMAP v2 #11）。
 
     - 子档案 extends: <父档案名> → 先加载父，再用子深合并覆盖
     - 列表整体替换不拼接（避免稀有度档/套装语义歧义）
     - 递归深度上限 4：环继承（a→b→a）自动截断并留日志
+    - v3.0: 档案不存在时自动创建通用默认档案
     """
     g = safe_name(game)
-    prof = _read_yaml(os.path.join(PROFILE_DIR, f"{g}.yaml"))
+    profile_path = os.path.join(PROFILE_DIR, f"{g}.yaml")
+    prof = _read_yaml(profile_path)
     if not isinstance(prof, dict) or not prof:
-        return {}
+        # v3.0-2: 陌生游戏自动建通用档案
+        if g and g != "florr":
+            _auto_create_profile(g, profile_path)
+            prof = _read_yaml(profile_path)
+            if not isinstance(prof, dict) or not prof:
+                return {}
+        else:
+            return {}
     parent = safe_name(str(prof.get("extends") or ""))
     if parent:
         if depth >= 4:
@@ -5760,7 +5797,25 @@ def _fetch_tutorials(game: str, target: str) -> list:
         log("[预热] 未装 requests，跳过联网检索")
         return out
 
-    # 用 DuckDuckGo HTML 搜索（无需 key）
+    # v3.0-5: 多源检索
+    if "web" in sources or not sources:
+        out.extend(_fetch_duckduckgo(queries))
+    if "bilibili" in sources:
+        out.extend(_fetch_bilibili(game, target))
+    if "reddit" in sources:
+        out.extend(_fetch_reddit(game, target))
+    if "wiki" in sources:
+        out.extend(_fetch_wiki(game, target))
+    return out
+
+
+def _fetch_duckduckgo(queries: list) -> list:
+    """DuckDuckGo 通用搜索。"""
+    out = []
+    try:
+        import requests
+    except ImportError:
+        return out
     for q in queries:
         try:
             r = requests.get(
@@ -5771,15 +5826,84 @@ def _fetch_tutorials(game: str, target: str) -> list:
             )
             if not r.ok:
                 continue
-            # 简单抓结果标题+摘要
             titles = re.findall(r'result__a[^>]*>([^<]+)<', r.text)
             snippets = re.findall(r'result__snippet[^>]*>([^<]+)<', r.text)
             for i, t in enumerate(titles[:5]):
                 snip = snippets[i] if i < len(snippets) else ""
                 out.append({"source": "web", "title": t.strip(), "text": snip.strip()})
         except Exception as e:
-            log(f"[预热] 搜索失败({q[:20]}...): {type(e).__name__}")
-        time.sleep(0.5)  # 限速防封
+            log(f"[预热] DDG搜索失败: {type(e).__name__}")
+        time.sleep(0.5)
+    return out
+
+
+def _fetch_bilibili(game: str, target: str) -> list:
+    """B站视频搜索（公开 API，无需 key）。"""
+    out = []
+    try:
+        import requests
+        r = requests.get(
+            "https://api.bilibili.com/x/web-interface/search/type",
+            params={"search_type": "video", "keyword": f"{game} {target} 攻略"},
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=10,
+        )
+        if r.ok:
+            data = r.json().get("data", {}).get("result", [])
+            for v in data[:5]:
+                title = re.sub(r'<[^>]+>', '', v.get("title", ""))
+                desc = v.get("description", "") or v.get("subtitle", "")
+                out.append({"source": "bilibili", "title": title, "text": desc})
+    except Exception as e:
+        log(f"[预热] B站搜索失败: {type(e).__name__}")
+    return out
+
+
+def _fetch_reddit(game: str, target: str) -> list:
+    """Reddit 搜索（公开 JSON 端点）。"""
+    out = []
+    try:
+        import requests
+        r = requests.get(
+            f"https://www.reddit.com/search.json",
+            params={"q": f"{game} {target}", "limit": 5},
+            headers={"User-Agent": "ugf-preheat/1.0"},
+            timeout=10,
+        )
+        if r.ok:
+            for post in r.json().get("data", {}).get("children", []):
+                d = post.get("data", {})
+                out.append({
+                    "source": "reddit",
+                    "title": d.get("title", ""),
+                    "text": d.get("selftext", "")[:300],
+                })
+    except Exception as e:
+        log(f"[预热] Reddit搜索失败: {type(e).__name__}")
+    return out
+
+
+def _fetch_wiki(game: str, target: str) -> list:
+    """游戏 wiki 搜索（尝试 Fandom wiki）。"""
+    out = []
+    try:
+        import requests
+        r = requests.get(
+            f"https://{game}.fandom.com/api.php",
+            params={"action": "query", "list": "search", "srsearch": target,
+                    "format": "json", "srlimit": 3},
+            headers={"User-Agent": "ugf-preheat/1.0"},
+            timeout=10,
+        )
+        if r.ok:
+            for item in r.json().get("query", {}).get("search", []):
+                out.append({
+                    "source": "wiki",
+                    "title": item.get("title", ""),
+                    "text": re.sub(r'<[^>]+>', '', item.get("snippet", "")),
+                })
+    except Exception as e:
+        log(f"[预热] Wiki搜索失败: {type(e).__name__}")
     return out
 
 
