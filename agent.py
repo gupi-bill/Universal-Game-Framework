@@ -2572,13 +2572,16 @@ class Perception:
             if not ok:
                 return {"error": "截图编码失败"}
             b64 = base64.b64encode(buf.tobytes()).decode()
+            is_3d = str(cfg_get("game.type", "2d")) == "3d"
+            z_field = ',"z":0.0' if is_3d else ''
+            z_hint = ' z是深度(近=1远=0)。' if is_3d else ''
             prompt = (
                 "你是游戏视觉识别器。看这张游戏截图，只输出JSON：\n"
                 '{"player":{"alive":true,"hp":100,"max_hp":100,"x":960,"y":540,'
-                '"power_score":100},"entities":[{"raw_id":"怪物名","rarity":"Common|Unusual|Rare|'
-                'Epic|Legendary|Mythic|Ultra|Super|Unique|Eternal","x":0,"y":0}],'
-                '"afk_popup":false}\n'
-                "坐标按屏幕像素。最多15个实体。加载/菜单界面则 player.alive=false。只输出JSON。"
+                '"power_score":100},"entities":[{"raw_id":"怪物名","rarity":"Common",'
+                f'"x":0,"y":0{z_field}],"afk_popup":false}}\n'
+                f"坐标按屏幕像素。最多15个实体。{z_hint}"
+                "加载/菜单界面则 player.alive=false。只输出JSON。"
             )
             r = requests.post(
                 url,
