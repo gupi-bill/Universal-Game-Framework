@@ -5650,6 +5650,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--game", default="florr", help="游戏名")
     sp.add_argument("--target", required=True, help="目标，如 boss名/关卡名")
 
+    sp = sub.add_parser("new-game", help="为新游戏创建档案向导")
+    sp.add_argument("name", help="游戏名（如 genshin, tetris）")
+    sp.add_argument("--type", default="2d", choices=["2d", "3d"], help="游戏类型")
+
     sp = sub.add_parser("action", help="执行一个动作")
     sp.add_argument("type", choices=list(VALID_ACTIONS))
     sp.add_argument("--x", type=int, default=None)
@@ -5781,6 +5785,21 @@ def main(argv=None) -> int:
         print(handle_afk())
     elif cmd == "preheat":
         _print(preheat(args.game, args.target))
+    elif cmd == "new-game":
+        name = safe_name(args.name)
+        path = os.path.join(PROFILE_DIR, f"{name}.yaml")
+        os.makedirs(PROFILE_DIR, exist_ok=True)
+        is_3d = args.type == "3d"
+        content = (
+            f"# {name} 游戏档案\n"
+            f"extends: florr\n\n"
+            f"game:\n  name: {name}\n  type: {args.type}\n\n"
+            f"perception:\n  backend: {'vlm' if not is_3d else 'vlm_3d'}\n\n"
+        )
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+        print(f"已创建档案: {path}")
+        print(f"下一步: AGENT_GAME={name} python3 ugf.pyz preheat --game {name} --target <目标>")
     elif cmd == "kb":
         if not args.kb_cmd:
             print(GUIDE)
